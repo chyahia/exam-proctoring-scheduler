@@ -1,0 +1,854 @@
+/* الإعدادات العامة للصفحة */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f0f2f5;
+    color: #333;
+    margin: 0;
+    padding: 20px;
+    direction: rtl; 
+}
+main {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px 40px;
+    background-color: #ffffff;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+h1, h2, h3, h4 { margin-top: 0; }
+h1 { text-align: center; color: #1a237e; border-bottom: 2px solid #3f51b5; padding-bottom: 10px; margin-bottom: 30px; }
+h2 { color: #3f51b5; border-bottom: 1px solid #e0e0e0; padding-bottom: 8px; margin-top: 40px; }
+h3 { color: #555; margin-bottom: 15px; }
+h4 { padding-bottom: 5px; border-bottom: 1px solid #ddd; }
+.hidden { display: none !important; }
+
+/* --- تصميم الأزرار العلوية --- */
+.app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    position: relative;
+}
+.app-header h1 {
+    flex-grow: 1;
+    margin-bottom: 0;
+}
+.header-buttons {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    gap: 10px;
+}
+.header-btn {
+    background-color: #6c757d;
+    font-size: 14px;
+    padding: 8px 15px;
+    width: auto;
+}
+.header-btn:hover {
+    background-color: #5a6268;
+}
+
+
+.form-container, .management-container { 
+    display: grid; 
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); 
+    gap: 25px; 
+}
+.data-form { background-color: #f9f9f9; padding: 20px; border-radius: 6px; border: 1px solid #e0e0e0; display: flex; flex-direction: column; }
+.data-form textarea { flex-grow: 1; }
+
+input[type="text"], input[type="number"], input[type="date"], input[type="time"], select, textarea {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 15px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box; 
+    font-size: 16px;
+    background-color: #fff;
+}
+textarea { resize: vertical; }
+
+button {
+    width: 100%;
+    padding: 12px;
+    background-color: #3f51b5; 
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    transition: background-color 0.3s ease; 
+}
+button:hover { background-color: #303f9f; }
+
+.setting-block { margin-top: 30px; padding: 20px; background-color: #f8f9fa; border: 1px solid #e8e8e8; border-radius: 5px; }
+.description { font-size: 15px; color: #666; margin-bottom: 20px; line-height: 1.6; }
+.assignment-container { display: flex; gap: 20px; margin-bottom: 20px; }
+.panel { flex: 1; border: 1px solid #ddd; border-radius: 5px; padding: 15px; background-color: #fff; max-height: 350px; overflow-y: auto; display: flex; flex-direction: column; }
+.panel ul { list-style-type: none; padding: 0; margin: 0; overflow-y: auto; flex-grow: 1;}
+.panel li { padding: 0; cursor: pointer; border-bottom: 1px solid #f0f0f0; transition: background-color 0.2s; position: relative; }
+.panel li:last-child { border-bottom: none; }
+.panel li .list-entry:hover { background-color: #f5f5f5; }
+
+.panel li.selected > .list-entry { background-color: #90caf9 !important; }
+
+.list-entry { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; }
+.item-name { flex-grow: 1; }
+.item-count { font-size: 0.9em; color: #6c757d; font-weight: normal; margin-right: 5px; }
+.courses-dropdown-btn { all: unset; cursor: pointer; font-size: 16px; padding: 0 5px; }
+.courses-dropdown-list { display: none; background-color: #f1f1f1; list-style: none; padding: 0; margin: 0; border-top: 1px solid #ddd; }
+.courses-dropdown-list li { padding: 8px 15px; font-size: 14px; color: #333; cursor: default; }
+
+.panel li.assigned-prof > .list-entry { background-color: #c8e6c9; }
+.panel li.assigned-subj { background-color: #fff9c4; text-decoration: line-through; color: #777; padding: 8px 10px; }
+.panel li.assigned-subj:hover { background-color: #fff59d; }
+.panel #subjects-list-assign li.selected { background-color: #90caf9 !important; }
+
+.panel-search { width: auto; flex-shrink: 0; }
+#assign-subjects-button { width: auto; padding: 10px 25px; }
+#assign-subjects-button:disabled { background-color: #ccc; cursor: not-allowed; }
+
+.settings-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+.settings-table th, .settings-table td { border: 1px solid #ddd; padding: 12px; text-align: right; }
+.settings-table th { background-color: #f2f2f2; }
+.settings-table tbody tr:hover { background-color: #f9f9f9; }
+
+#professors-duty-pattern-container .settings-table td:last-child {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 8px;
+}
+#professors-duty-pattern-container .settings-table label {
+    margin: 0 10px;
+    white-space: nowrap;
+}
+
+/* حذف القواعد المتعارضة */
+#level-halls-assignment-container td:last-child {
+    width: auto;
+    /* text-align: left; -- تم الحذف */
+    /* direction: ltr; -- تم الحذف */
+}
+
+/* استخدام Flexbox للتحكم الدقيق في التوزيع */
+.halls-checkbox-group {
+    display: flex;
+    flex-wrap: wrap; /* للسماح بالالتفاف بشكل صحيح */
+    gap: 15px; /* لإضافة مسافة بين العناصر */
+    justify-content: flex-start; /* لضمان البدء من اليمين في RTL */
+}
+
+.halls-checkbox-group label {
+    margin-right: 0; /* لم نعد بحاجة لهذا الهامش بوجود gap */
+    white-space: nowrap; /* لمنع اسم القاعة من الالتفاف لسطر جديد */
+}
+
+#professors-unavailability-container .settings-table td:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+    align-items: center;
+    padding: 10px;
+    direction: ltr;
+    justify-content: flex-start;
+}
+.unavailable-day-label {
+    display: inline-block;
+    padding: 5px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+    background-color: #fff;
+    white-space: nowrap;
+    transition: background-color 0.2s, color 0.2s;
+}
+.unavailable-day-label input {
+    display: none;
+}
+.unavailable-day-label input:checked + span {
+    background-color: #ffcdd2;
+    border-color: #c82333;
+}
+.unavailable-day-label span {
+    padding: 5px;
+}
+
+#exam-schedule-setup .setting-block { background-color: #ffffff; }
+.action-button { width: auto; padding: 10px 20px; font-weight: bold; }
+#add-exam-day-button { background-color: #28a745; }
+#add-exam-day-button:hover { background-color: #218838; }
+
+.exam-day { border: 1px solid #ccc; border-radius: 6px; padding: 20px; margin-top: 20px; background-color: #f9f9f9; }
+.exam-day-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 10px; margin-bottom: 20px; }
+.exam-day-header h4 { border-bottom: none; flex-grow: 1; }
+.exam-day-header input[type="date"] { border: 1px solid #ccc; padding: 5px; border-radius: 4px; margin: 0 15px; }
+.duplicate-day-btn, .remove-day-btn { all: unset; cursor: pointer; font-size: 20px; transition: transform 0.2s; }
+.duplicate-day-btn:hover { transform: scale(1.2) rotate(90deg); }
+.remove-day-btn { color: #dc3545; }
+.remove-day-btn:hover { transform: scale(1.2); }
+
+.time-slot { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 15px; padding: 15px; border: 1px dashed #ddd; border-radius: 4px; margin-bottom: 10px; }
+.time-slot-inputs { display: flex; flex-direction: column; gap: 10px; }
+.time-slot-inputs input, .time-slot-inputs select { width: 150px; padding: 8px; font-size: 14px; margin-bottom: 0; text-align: center; }
+
+.levels-checkbox-group {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 10px;
+    background-color: #fff;
+    max-height: 120px;
+    overflow-y: auto;
+}
+.levels-checkbox-group label {
+    display: block;
+    margin-bottom: 5px;
+    cursor: pointer;
+    font-size: 15px;
+}
+.levels-checkbox-group label:hover {
+    background-color: #f5f5f5;
+}
+.levels-checkbox-group label input {
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.add-timeslot-button { width: 100%; padding: 8px 15px; font-size: 14px; background-color: #007bff; margin-top: 10px; }
+.add-timeslot-button:hover{ background-color: #0069d9; }
+
+.final-buttons-container {
+    display: flex;
+    gap: 15px;
+    margin-top: 10px;
+}
+.generate-btn { padding: 15px 30px; font-size: 18px; background-color: #dc3545; flex-grow: 1; }
+.generate-btn:hover { background-color: #c82333; }
+.save-btn { padding: 15px 30px; font-size: 18px; background-color: #007bff; flex-grow: 1; }
+.save-btn:hover { background-color: #0069d9; }
+.export-btn { font-size: 14px; background-color: #17a2b8; }
+.export-btn:hover { background-color: #138496; }
+.export-btn:disabled { background-color: #ccc; cursor: not-allowed; }
+.export-buttons-container { margin-top: 20px; }
+
+#results-container table { width: 100%; margin-top: 20px; border-collapse: collapse; }
+#results-container th, #results-container td { border: 1px solid #dee2e6; padding: 12px; text-align: right; }
+#results-container th { background-color: #f8f9fa; }
+
+.level-schedule-container {
+    margin-bottom: 40px;
+}
+.level-schedule-title {
+    background-color: #3f51b5;
+    color: white;
+    padding: 10px;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 20px;
+}
+.results-grid-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+    table-layout: fixed;
+    font-size: 14px;
+}
+.results-grid-table th, .results-grid-table td {
+    border: 1px solid #999;
+    padding: 8px;
+    text-align: center;
+    vertical-align: top;
+}
+.results-grid-table th {
+    background-color: #e0e0e0;
+}
+.results-grid-table td {
+    min-height: 140px; /* Use min-height */
+    background-color: #fff;
+}
+.exam-cell {
+    text-align: right;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 5px;
+    border-radius: 4px;
+}
+.guards-incomplete {
+    background-color: #fff0f0 !important;
+    border: 2px solid #dc3545;
+}
+.exam-subject {
+    font-weight: bold;
+    color: #0056b3;
+}
+.exam-professor {
+    font-size: 13px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 5px;
+}
+.exam-guards-section {
+    text-align: right;
+}
+.guards-title {
+     color: #c82333;
+     font-weight: bold;
+}
+.hall-group {
+    margin-top: 2px;
+}
+.hall-type-title {
+    font-weight: bold;
+    font-size: 13px;
+    color: #333;
+}
+.hall-guards-list {
+    font-weight: normal;
+    color: #333;
+    font-size: 12px;
+    padding-right: 10px;
+}
+
+.management-list li { 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+    padding: 8px 10px; 
+}
+.item-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.edit-btn, .delete-btn { 
+    all: unset; 
+    cursor: pointer; 
+    font-size: 20px;
+    line-height: 1;
+}
+.delete-btn { color: #dc3545; }
+.delete-btn:hover { color: #c82333; }
+.edit-btn { color: #007bff; }
+.edit-btn:hover { color: #0056b3; }
+
+#reports-display-area {
+    margin-top: 30px;
+    padding: 20px;
+    background-color: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+}
+.report-section {
+    margin-bottom: 20px;
+}
+.report-section h4 {
+    color: #1a237e;
+    border-bottom: 2px solid #e0e0e0;
+    padding-bottom: 8px;
+}
+.report-section ul {
+    list-style-type: '• ';
+    padding-right: 20px;
+}
+.report-section li {
+    margin-bottom: 8px;
+    line-height: 1.6;
+}
+.report-section .failure {
+    color: #c82333;
+    font-weight: bold;
+}
+
+/* --- تنسيق أزرار النسخ الاحتياطي والاستيراد --- */
+.template-btn { background-color: #17a2b8; }
+.template-btn:hover { background-color: #138496; }
+.import-btn { background-color: #fd7e14; }
+.import-btn:hover { background-color: #e36d0a; }
+.backup-btn { background-color: #218838; }
+.backup-btn:hover { background-color: #1e7e34; }
+.restore-btn { background-color: #e0a800; }
+.restore-btn:hover { background-color: #c69500; }
+.reset-btn { background-color: #6c757d; }
+.reset-btn:hover { background-color: #5a6268; }
+
+
+/* --- أنماط تقرير التوازن الجديد --- */
+.target-distribution-report {
+    margin-top: 30px;
+    padding: 20px;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+}
+
+.distribution-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+    font-size: 15px;
+}
+.distribution-table th, .distribution-table td {
+    border: 1px solid #ccc;
+    padding: 10px;
+    text-align: center;
+}
+.distribution-table thead {
+    background-color: #e9ecef;
+    font-weight: bold;
+}
+.distribution-table tbody tr:nth-child(even) {
+    background-color: #fff;
+}
+
+.balance-indicator {
+    margin-top: 20px;
+    display: flex;
+    align-items: center;
+    font-size: 18px;
+}
+.balance-indicator span {
+    font-weight: bold;
+    margin-left: 10px;
+}
+
+.progress-bar {
+    flex-grow: 1;
+    height: 30px;
+    background-color: #e9ecef;
+    border-radius: 15px;
+    overflow: hidden;
+    direction: ltr; /* مهم لاتجاه الشريط */
+    border: 1px solid #ccc;
+}
+
+.progress {
+    height: 100%;
+    background-color: #28a745; /* Green */
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 16px;
+    transition: width 0.5s ease-in-out;
+}
+
+/* ============== بداية تنسيقات الإضافة الجديدة ============== */
+.custom-target-container {
+    padding-top: 15px;
+    border-top: 1px solid #e0e0e0;
+    margin-top: 15px;
+}
+.custom-target-inputs {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.custom-target-inputs input {
+    margin-bottom: 0;
+    text-align: center;
+}
+.custom-target-inputs span {
+    font-weight: bold;
+    font-size: 18px;
+}
+#add-custom-target-btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    font-size: 24px;
+    flex-shrink: 0;
+}
+#custom-targets-table {
+    width: 100%;
+    margin-top: 15px;
+    border-collapse: collapse;
+    background-color: #fff;
+}
+#custom-targets-table th, #custom-targets-table td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    text-align: center;
+}
+#custom-targets-table th {
+    background-color: #e9ecef;
+}
+.delete-target-btn {
+    background: none;
+    border: none;
+    color: red;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 5px;
+}
+
+/* ============== تنسيقات لوحة المعلومات الإحصائية ============== */
+.stats-dashboard-container {
+    margin-top: 30px;
+    border-top: 2px solid #3f51b5;
+    padding-top: 20px;
+}
+
+.stats-dashboard {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 20px;
+}
+
+.stat-card {
+    background-color: #fff;
+    border: 1px solid #e0e0e0;
+    border-right: 5px solid #17a2b8;
+    padding: 20px;
+    border-radius: 6px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+.stat-card h4 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #3f51b5;
+    font-size: 16px;
+}
+
+.stat-card p {
+    margin: 0;
+    font-size: 24px;
+    font-weight: bold;
+    color: #333;
+}
+.stat-card .sub-stat {
+    font-size: 14px;
+    font-weight: normal;
+    color: #666;
+    margin-top: 5px;
+}
+.stat-card ul {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+.stat-card ul li {
+    font-size: 15px;
+    color: #333;
+    margin-bottom: 5px;
+}
+.stat-card ul li span {
+    font-weight: bold;
+}
+
+/* ============== تنسيقات البحث في النتائج ============== */
+#results-search-container {
+    margin: 25px 0 15px 0;
+}
+
+#results-search-input {
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+    border: 2px solid #3f51b5;
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+.results-grid-table .highlight-search {
+    background-color: #ffc107 !important; /* لون أصفر واضح */
+    transition: background-color 0.3s ease;
+}
+
+/* --- تنسيقات حاوية إدخال الوقت وزر الحذف --- */
+.time-slot-inputs-container {
+    display: flex;
+    align-items: flex-start; /* يضمن محاذاة العناصر للأعلى */
+    gap: 10px;
+}
+
+/* --- تنسيق زر حذف الفترة الزمنية --- */
+.remove-timeslot-btn {
+    all: unset; /* إعادة تعيين كل التنسيقات الافتراضية */
+    cursor: pointer;
+    font-size: 24px;
+    line-height: 1;
+    color: #dc3545; /* لون أحمر */
+    font-weight: bold;
+    padding: 5px;
+    transition: transform 0.2s, color 0.2s;
+    flex-shrink: 0; /* يمنع الزر من التقلص */
+}
+
+.remove-timeslot-btn:hover {
+    color: #a71d2a; /* لون أحمر أغمق عند المرور */
+    transform: scale(1.2);
+}
+
+/* تنسيقات خاصة بخيارات استراتيجية الموازنة لجعلها عمودية */
+#balancing-strategy-options-container {
+    display: flex;
+    flex-direction: column; /* هذا السطر يجعل العناصر عمودية */
+    gap: 10px; /* لإضافة مسافة بين الخيارات */
+}
+
+#balancing-strategy-options-container label {
+    border: 1px solid #ccc;
+    padding: 10px;
+    border-radius: 5px;
+}
+
+#swap-attempts-label, #polishing-swaps-label {
+    border: none; /* إزالة الإطار من خانات الإدخال */
+    padding-left: 0;
+    padding-right: 0;
+    margin-right: 25px; /* لمحاذاة خانة الإدخال مع باقي الخيارات */
+}
+
+.strategy-params {
+    padding-right: 25px;
+    padding-left: 25px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+.strategy-params label {
+    border: none !important;
+    padding: 2px 0 !important;
+    display: block;
+}
+
+/* --- تنسيقات الصندوق الأسود لمتابعة سير العملية --- */
+#live-log-container {
+    margin-top: 20px;
+    padding: 15px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+#live-log-output {
+    background-color: #000;
+    color: #0f0; /* لون أخضر فوسفوري */
+    font-family: 'Courier New', Courier, monospace;
+    padding: 10px;
+    height: 200px;
+    overflow-y: scroll;
+    border-radius: 4px;
+    white-space: pre-wrap; /* للسماح بالتفاف الأسطر الطويلة */
+}
+
+/* --- تنسيق خاص لإبراز نقص الحراس --- */
+.guard-shortage {
+    color: #721c24; /* لون أحمر غامق للنص */
+    background-color: #f8d7da; /* خلفية حمراء فاتحة */
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid #f5c6cb;
+    display: inline-block; /* لكي يظهر التنسيق بشكل صحيح */
+}
+
+/* في نهاية ملف style.css */
+
+/* --- تنسيق خاص بمربع تقرير نقص الحراسة (نسخة معدلة) --- */
+.stat-card.shortage-report {
+    border-right-color: #dc3545; /* لون أحمر للتحذير */
+}
+
+.stat-card.shortage-report h4 {
+    color: #dc3545;
+}
+
+.stat-card.shortage-report ul {
+    list-style-type: '⚠️ '; /* إضافة أيقونة تحذير بجانب كل عنصر */
+    padding-right: 20px;
+}
+
+.stat-card.shortage-report li {
+    font-weight: 500;
+    color: #555;
+}
+
+/* في نهاية ملف style.css */
+
+/* --- تنسيق رسالة عدم وجود نقص --- */
+.no-shortage-message {
+    color: #155724; /* لون أخضر داكن للنص */
+    background-color: #d4edda; /* خلفية خضراء فاتحة */
+    border: 1px solid #c3e6cb; /* إطار أخضر */
+    padding: 15px;
+    border-radius: 4px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 16px;
+    margin-top: 10px;
+}
+
+/* في نهاية ملف style.css */
+.report-subsection {
+    margin-bottom: 15px;
+}
+.report-subsection:last-child {
+    margin-bottom: 0;
+}
+.report-subsection h5 {
+    margin: 0 0 8px 0;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #e0e0e0;
+    font-size: 15px;
+    color: #721c24; 
+}
+.report-subsection ul {
+    list-style-type: '⚠️ ';
+    padding-right: 20px;
+    margin: 0;
+}
+
+/* --- تنسيق رسالة التأكيد --- */
+#notification-area {
+    position: fixed;
+    bottom: -100px; /* ابدأ من خارج الشاشة */
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 15px 25px;
+    border-radius: 8px;
+    color: white;
+    background-color: #28a745; /* لون أخضر للنجاح */
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    transition: bottom 0.5s ease-in-out;
+    z-index: 1000;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+#notification-area.show {
+    bottom: 30px; /* إظهار الرسالة داخل الشاشة */
+}
+
+#notification-area.error {
+    background-color: #dc3545; /* لون أحمر للخطأ */
+}
+
+/* --- تنسيقات شريط التقدم --- */
+#progress-bar-container {
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    background-color: #f8f9fa;
+}
+
+#progress-bar-container span {
+    font-weight: bold;
+    margin-left: 10px;
+}
+
+.progress-bar-outer {
+    width: 100%;
+    background-color: #e9ecef;
+    border: 1px solid #ced4da;
+    border-radius: .25rem;
+    margin-top: 5px;
+}
+
+#progress-bar-inner {
+    width: 0%; /* يبدأ بعرض صفر */
+    height: 24px;
+    background-color: #007bff;
+    color: white;
+    text-align: center;
+    line-height: 24px;
+    font-weight: bold;
+    border-radius: .25rem;
+    transition: width 0.4s ease; /* لإضافة حركة ناعمة عند التعبئة */
+}
+
+/* --- تنسيق خاص لإبراز إطار البحث المكثف --- */
+#intensive-search-container {
+  background-color: #fffde7; /* لون أصفر فاتح جدًا للخلفية */
+  border: 2px solid #ffc107; /* إطار بلون أصفر عنبري بارز */
+  border-radius: 8px;
+  padding: 15px;
+  margin-top: 15px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.08); /* ظل خفيف لإعطاء عمق */
+}
+
+/* style.css */
+
+/* --- تنسيقات أداة حساب التوزيع العادل --- */
+#fair-distribution-calculator {
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+}
+
+#calculator-inputs {
+  display: flex;
+  flex-wrap: wrap; /* للسماح بالالتفاف على الشاشات الصغيرة */
+  gap: 10px;
+  align-items: center;
+}
+
+#calculator-inputs input {
+  flex: 1; /* لجعل الحقول تتمدد وتأخذ مساحة متساوية */
+  min-width: 150px; /* أقل عرض للحقل */
+  margin-bottom: 0;
+}
+
+#run-calculator-btn {
+  width: auto;
+  flex-shrink: 0; /* لمنع الزر من التقلص */
+  padding: 10px 20px;
+}
+
+#calculator-results table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+#calculator-results th, #calculator-results td {
+  border: 1px solid #ccc;
+  padding: 10px;
+  text-align: center;
+}
+
+#calculator-results th {
+  background-color: #e9ecef;
+}
+
+/* style.css */
+
+#autofill-calculator-btn {
+    background-color: #28a745; /* لون أخضر */
+}
+#autofill-calculator-btn:hover {
+    background-color: #218838;
+}
+
+/* style.css */
+
+/* --- تنسيقات جديدة لأداة حساب التوزيع --- */
+#calculator-inputs {
+    align-items: flex-end; /* لمحاذاة العناصر للأسفل */
+}
+
+.calc-input-group {
+    flex: 1; /* لجعل كل مجموعة تأخذ مساحة متساوية */
+    min-width: 150px;
+}
+
+.calc-input-group label {
+    display: block;
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 5px;
+    font-weight: 600;
+}
+
+.calc-buttons-group {
+    display: flex;
+    gap: 10px;
+    padding-bottom: 1px; /* لضمان محاذاة الأزرار مع الحقول */
+}
