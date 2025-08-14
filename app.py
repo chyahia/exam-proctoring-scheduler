@@ -55,13 +55,40 @@ def get_correct_path(relative_path):
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
-if getattr(sys, 'frozen', False):
-    data_dir_path = os.path.join(os.path.dirname(sys.executable), 'data')
-else:
-    data_dir_path = os.path.join(os.path.dirname(__file__), 'data')
+# ================== بداية الكود الجديد لتحديد مسار البيانات بذكاء ==================
+import shutil # تأكد من وجود هذه المكتبة مع بقية المكتبات المستوردة
 
-DATA_DIR = data_dir_path
+def get_data_directory():
+    """
+    يحدد المسار الصحيح لمجلد 'data' بناءً على بيئة التشغيل.
+    """
+    # التحقق مما إذا كان البرنامج يعمل كملف تنفيذي (مُجمّد)
+    if getattr(sys, 'frozen', False):
+        executable_path = os.path.dirname(sys.executable)
+
+        # التحقق مما إذا كان يعمل من مجلد نظام محمي مثل Program Files
+        if 'program files' in executable_path.lower():
+            # الحالة 1: البرنامج مثبت -> استخدم مجلد AppData
+            app_name = "ExamGuardScheduler" # اسم فريد لبرنامجك
+            app_data_path = os.path.join(os.getenv('APPDATA'), app_name)
+
+            # عند أول تشغيل، قم بنسخ مجلد 'data' من مكان التثبيت إلى AppData
+            install_source_data_dir = os.path.join(executable_path, 'data')
+            if not os.path.exists(app_data_path) and os.path.exists(install_source_data_dir):
+                shutil.copytree(install_source_data_dir, app_data_path)
+
+            return app_data_path
+        else:
+            # الحالة 2: البرنامج يعمل كـ exe ولكن من مجلد عادي (مثل dist)
+            return os.path.join(executable_path, 'data')
+    else:
+        # الحالة 3: البرنامج يعمل كسكربت .py في بيئة التطوير
+        return os.path.join(os.path.dirname(__file__), 'data')
+
+# استدعاء الدالة لتحديد المسارات النهائية
+DATA_DIR = get_data_directory()
 DB_PATH = os.path.join(DATA_DIR, 'database.db')
+# ================== نهاية الكود الجديد ==================
 
 # --- دوال التعامل مع قاعدة البيانات ---
 
