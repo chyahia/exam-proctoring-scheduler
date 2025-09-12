@@ -43,6 +43,15 @@ from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import pandas as pd
 
+from docx import Document
+from docx.shared import Cm
+from docx.enum.section import WD_ORIENT
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+
+
 # ================== الجزء الثاني: الإعدادات الأولية والدوال المساعدة ==================
 
 log_queue = queue.Queue()
@@ -2431,6 +2440,69 @@ def _run_schedule_logic_in_background(settings, log_q):
         log_q.put(error_details)
         log_q.put("DONE" + json.dumps({"success": False, "message": f"خطأ فادح: {e}"}))
 
+
+# يمكن إضافتها بعد دوال الخوارزمية وقبل مسارات API
+
+# استبدل هذه الدالة بالكامل في ملف app.py
+def create_word_document_with_table(doc, title, headers, data_grid):
+    """
+    يضيف عنواناً وجدولاً إلى مستند وورد موجود مع دعم كامل للغة العربية (RTL).
+    """
+    # --- ✅ بداية: الكود الجديد لتصحيح اتجاه العنوان ---
+    heading = doc.add_heading(level=2)
+    heading.clear() # مسح أي محتوى افتراضي
+    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    # إضافة خاصية اتجاه الفقرة من اليمين لليسار
+    pPr = heading._p.get_or_add_pPr()
+    bidi = OxmlElement('w:bidi')
+    bidi.set(qn('w:val'), '1')
+    pPr.append(bidi)
+    
+    # إضافة النص كـ "run" مع تفعيل خاصية RTL للخط
+    run = heading.add_run(title)
+    font = run.font
+    font.rtl = True
+    font.name = 'Arial'
+    # --- ✅ نهاية: الكود الجديد لتصحيح اتجاه العنوان ---
+
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = 'Table Grid'
+    table.autofit = False
+
+    tbl_pr = table._element.xpath('w:tblPr')[0]
+    bidi_visual_element = OxmlElement('w:bidiVisual')
+    tbl_pr.append(bidi_visual_element)
+
+    hdr_cells = table.rows[0].cells
+    for i, header in enumerate(headers):
+        cell_paragraph = hdr_cells[i].paragraphs[0]
+        cell_paragraph.text = ""
+        run = cell_paragraph.add_run(header)
+        font = run.font
+        font.rtl = True
+        font.name = 'Arial'
+        cell_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cell_paragraph.paragraph_format.rtl = True
+
+    for row_data in data_grid:
+        row_cells = table.add_row().cells
+        for i, cell_data in enumerate(row_data):
+            cell_paragraph = row_cells[i].paragraphs[0]
+            cell_paragraph.text = ""
+            lines = str(cell_data).split('\n')
+            for idx, line in enumerate(lines):
+                if idx > 0:
+                    cell_paragraph.add_run().add_break()
+                run = cell_paragraph.add_run(line)
+                font = run.font
+                font.rtl = True
+                font.name = 'Arial'
+            cell_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            cell_paragraph.paragraph_format.rtl = True
+            
+    doc.add_page_break()
+
 # ================== الجزء الثالث: إعداد تطبيق فلاسك والمسارات (Routes) ==================
 app = Flask( __name__, template_folder=get_correct_path('templates'), static_folder=get_correct_path('static') )
 app.config['JSON_AS_ASCII'] = False
@@ -3069,6 +3141,310 @@ def shutdown():
         os.kill(os.getpid(), signal.SIGINT)
     threading.Thread(target=do_shutdown).start()
     return jsonify({"success": True, "message": "Shutdown signal sent."})
+
+# أضف هذا الكود في نهاية ملف app.py قبل قسم التشغيل
+
+
+# استبدل هذه الدالة بالكامل في ملف app.py
+# استبدل هذه الدالة بالكامل في ملف app.py
+@app.route('/api/export/word/all-exams', methods=['POST'])
+def export_exams_word():
+    schedule_data = request.get_json()
+    if not schedule_data: return jsonify({"error": "No schedule data provided"}), 400
+    
+    conn = get_db_connection()
+    assignments_rows = conn.execute('SELECT s.name as subj_name, l.name as level_name, p.name as prof_name FROM assignments a JOIN subjects s ON a.subject_id = s.id JOIN levels l ON s.level_id = l.id JOIN professors p ON a.professor_id = p.id').fetchall()
+    settings_row = conn.execute("SELECT value FROM settings WHERE key = 'main_settings'").fetchone()
+    conn.close()
+    
+    settings_data = json.loads(settings_row['value']) if settings_row else {}
+    guards_large = int(settings_data.get('guardsLargeHall', 4))
+    guards_medium = int(settings_data.get('guardsMediumHall', 2))
+    guards_small = int(settings_data.get('guardsSmallHall', 1))
+
+    subject_owners = {(row['subj_name'], row['level_name']): row['prof_name'] for row in assignments_rows}
+    
+    doc = Document()
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    new_width, new_height = section.page_height, section.page_width
+    section.page_width = new_width
+    section.page_height = new_height
+    margin = Cm(0.5)
+    section.top_margin, section.bottom_margin, section.left_margin, section.right_margin = margin, margin, margin, margin
+
+    all_dates = sorted(schedule_data.keys())
+    all_times = sorted({time for date_slots in schedule_data.values() for time in date_slots})
+    all_levels = sorted({exam['level'] for slots in schedule_data.values() for exams in slots.values() for exam in exams})
+    day_names = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"]
+    
+    headers = ["الفترة"] + [f"{day_names[datetime.strptime(d, '%Y-%m-%d').isoweekday() % 7]}\n{d}" for d in all_dates]
+
+    for level in all_levels:
+        data_grid = []
+        for time in all_times:
+            row_data = [time]
+            for date in all_dates:
+                exam = next((e for e in schedule_data.get(date, {}).get(time, []) if e['level'] == level), None)
+                content = ""
+                if exam:
+                    owner = subject_owners.get((exam['subject'], exam['level']), "غير محدد")
+                    content = f"{exam['subject']}\nأستاذ المادة: {owner}\n\nالحراسة:"
+
+                    halls_by_type = defaultdict(list)
+                    for h in exam.get('halls', []): halls_by_type[h['type']].append(h['name'])
+                    
+                    guards_copy = [g for g in exam.get('guards', []) if g != "**نقص**"]
+
+                    if halls_by_type.get('كبيرة'):
+                        num_guards_needed = len(halls_by_type['كبيرة']) * guards_large
+                        g_list = guards_copy[:num_guards_needed]
+                        guards_copy = guards_copy[num_guards_needed:]
+                        hall_names = ", ".join(halls_by_type['كبيرة'])
+                        guard_text = '\n'.join(g_list) if g_list else '(لا يوجد)'
+                        content += f"\nالقاعة الكبيرة: {hall_names}\n{guard_text}"
+                    
+                    other_hall_names = halls_by_type.get('متوسطة', []) + halls_by_type.get('صغيرة', [])
+                    if other_hall_names:
+                        guard_text = '\n'.join(guards_copy) if guards_copy else '(لا يوجد)'
+                        content += f"\nالقاعات الأخرى: {', '.join(other_hall_names)}\n{guard_text}"
+                
+                row_data.append(content)
+            data_grid.append(row_data)
+        
+        create_word_document_with_table(doc, f"جدول امتحانات: {level}", headers, data_grid)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name="جداول_الامتحانات.docx", mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+# استبدل هذه الدالة بالكامل في ملف app.py
+@app.route('/api/export/word/all-profs', methods=['POST'])
+def export_profs_word():
+    schedule_data = request.get_json()
+    if not schedule_data: return jsonify({"error": "No schedule data provided"}), 400
+
+    conn = get_db_connection()
+    all_professors = sorted([p['name'] for p in conn.execute("SELECT name FROM professors").fetchall()])
+    assignments_rows = conn.execute('SELECT p.name as prof_name, s.name as subj_name, l.name as level_name FROM assignments a JOIN professors p ON a.professor_id = p.id JOIN subjects s ON a.subject_id = s.id JOIN levels l ON s.level_id = l.id').fetchall()
+    conn.close()
+
+    prof_owned_subjects = defaultdict(set)
+    for row in assignments_rows:
+        prof_owned_subjects[row['prof_name']].add((row['subj_name'], row['level_name']))
+
+    doc = Document()
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    new_width, new_height = section.page_height, section.page_width
+    section.page_width = new_width
+    section.page_height = new_height
+    margin = Cm(0.5)
+    section.top_margin, section.bottom_margin, section.left_margin, section.right_margin = margin, margin, margin, margin
+
+    all_dates = sorted(schedule_data.keys())
+    all_times = sorted({time for date_slots in schedule_data.values() for time in date_slots})
+    day_names = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"]
+    
+    for prof_name in all_professors:
+        title = f"جدول الحراسة: {prof_name}"
+        headers = ["اليوم/التاريخ"] + all_times
+        
+        # --- بناء هيكل الجدول مع عنوان سليم ---
+        heading = doc.add_heading(level=2); heading.clear()
+        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        pPr = heading._p.get_or_add_pPr()
+        bidi = OxmlElement('w:bidi'); bidi.set(qn('w:val'), '1'); pPr.append(bidi)
+        run = heading.add_run(title)
+        font = run.font; font.rtl = True; font.name = 'Arial'
+
+        table = doc.add_table(rows=1, cols=len(headers))
+        table.style = 'Table Grid'
+        table.autofit = False
+        tbl_pr = table._element.xpath('w:tblPr')[0]
+        bidi_visual_element = OxmlElement('w:bidiVisual')
+        tbl_pr.append(bidi_visual_element)
+        
+        hdr_cells = table.rows[0].cells
+        for i, header in enumerate(headers):
+            p = hdr_cells[i].paragraphs[0]; p.text = ""
+            run = p.add_run(header)
+            font = run.font; font.rtl = True; font.name = 'Arial'
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.rtl = True
+
+        has_any_duty = False
+        for date in all_dates:
+            row_cells = table.add_row().cells
+            day_name = day_names[datetime.strptime(date, '%Y-%m-%d').isoweekday() % 7]
+            
+            p = row_cells[0].paragraphs[0]; p.text = ""
+            run = p.add_run(f"{day_name}\n{date}"); run.font.rtl = True; run.font.name = 'Arial'; run.bold = True
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER; p.paragraph_format.rtl = True
+
+            for i, time in enumerate(all_times, 1):
+                cell_content_parts = []
+                is_teaching_and_guarding = False
+                is_teaching_only = False
+                
+                exams_in_slot = schedule_data.get(date, {}).get(time, [])
+                
+                for exam in exams_in_slot:
+                    is_guarding = prof_name in exam.get('guards', [])
+                    is_owner = (exam['subject'], exam['level']) in prof_owned_subjects.get(prof_name, set())
+
+                    if is_guarding or is_owner:
+                        has_any_duty = True
+                        if is_guarding:
+                            if is_owner: is_teaching_and_guarding = True
+                            # ✅ التعديل هنا: استبدال القاعات بـ (حراسة)
+                            cell_content_parts.append(f"{exam['subject']} ({exam['level']})\n(حراسة)")
+                        elif is_owner:
+                            is_teaching_only = True
+                            cell_content_parts.append(f"{exam['subject']} ({exam['level']})\n(دون حراسة)")
+                
+                p = row_cells[i].paragraphs[0]; p.text = ""
+                lines = "\n---\n".join(cell_content_parts).split('\n')
+                for idx, line in enumerate(lines):
+                    if idx > 0: p.add_run().add_break()
+                    run = p.add_run(line)
+                    font = run.font; font.rtl = True; font.name = 'Arial'
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT; p.paragraph_format.rtl = True
+                
+                shading_elm = OxmlElement('w:shd')
+                if is_teaching_and_guarding:
+                    shading_elm.set(qn('w:fill'), 'D4EDDA')
+                    row_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+                elif is_teaching_only:
+                    shading_elm.set(qn('w:fill'), 'FFF3CD')
+                    row_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+        if has_any_duty:
+             doc.add_page_break()
+        else:
+            doc._body.remove(table._element)
+            doc._body.remove(heading._element)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name="جداول_الحراسة_للأساتذة.docx", mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+# أضف هذه الدالة الجديدة بالكامل في نهاية ملف app.py
+@app.route('/api/export/word/all-profs-anonymous', methods=['POST'])
+def export_profs_anonymous_word():
+    schedule_data = request.get_json()
+    if not schedule_data: return jsonify({"error": "No schedule data provided"}), 400
+
+    conn = get_db_connection()
+    all_professors = sorted([p['name'] for p in conn.execute("SELECT name FROM professors").fetchall()])
+    assignments_rows = conn.execute('SELECT p.name as prof_name, s.name as subj_name, l.name as level_name FROM assignments a JOIN professors p ON a.professor_id = p.id JOIN subjects s ON a.subject_id = s.id JOIN levels l ON s.level_id = l.id').fetchall()
+    conn.close()
+
+    prof_owned_subjects = defaultdict(set)
+    for row in assignments_rows:
+        prof_owned_subjects[row['prof_name']].add((row['subj_name'], row['level_name']))
+
+    doc = Document()
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    new_width, new_height = section.page_height, section.page_width
+    section.page_width = new_width
+    section.page_height = new_height
+    margin = Cm(0.5)
+    section.top_margin, section.bottom_margin, section.left_margin, section.right_margin = margin, margin, margin, margin
+
+    all_dates = sorted(schedule_data.keys())
+    all_times = sorted({time for date_slots in schedule_data.values() for time in date_slots})
+    day_names = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"]
+    
+    for prof_name in all_professors:
+        title = f"جدول الحراسة (مُبسَّط): {prof_name}"
+        headers = ["اليوم/التاريخ"] + all_times
+        
+        heading = doc.add_heading(level=2); heading.clear()
+        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        pPr = heading._p.get_or_add_pPr()
+        bidi = OxmlElement('w:bidi'); bidi.set(qn('w:val'), '1'); pPr.append(bidi)
+        run = heading.add_run(title)
+        font = run.font; font.rtl = True; font.name = 'Arial'
+
+        table = doc.add_table(rows=1, cols=len(headers))
+        table.style = 'Table Grid'
+        table.autofit = False
+        tbl_pr = table._element.xpath('w:tblPr')[0]
+        bidi_visual_element = OxmlElement('w:bidiVisual')
+        tbl_pr.append(bidi_visual_element)
+        
+        hdr_cells = table.rows[0].cells
+        for i, header in enumerate(headers):
+            p = hdr_cells[i].paragraphs[0]; p.text = ""
+            run = p.add_run(header)
+            font = run.font; font.rtl = True; font.name = 'Arial'
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.rtl = True
+
+        has_any_duty = False
+        for date in all_dates:
+            row_cells = table.add_row().cells
+            day_name = day_names[datetime.strptime(date, '%Y-%m-%d').isoweekday() % 7]
+            
+            p = row_cells[0].paragraphs[0]; p.text = ""
+            run = p.add_run(f"{day_name}\n{date}"); run.font.rtl = True; run.font.name = 'Arial'; run.bold = True
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER; p.paragraph_format.rtl = True
+
+            for i, time in enumerate(all_times, 1):
+                cell_content_parts = []
+                is_teaching_and_guarding = False
+                is_teaching_only = False
+                
+                exams_in_slot = schedule_data.get(date, {}).get(time, [])
+                
+                for exam in exams_in_slot:
+                    is_guarding = prof_name in exam.get('guards', [])
+                    is_owner = (exam['subject'], exam['level']) in prof_owned_subjects.get(prof_name, set())
+
+                    if is_guarding or is_owner:
+                        has_any_duty = True
+                        if is_guarding:
+                            if is_owner:
+                                is_teaching_and_guarding = True
+                                cell_content_parts.append(f"{exam['subject']} ({exam['level']})\n(حراسة)")
+                            else:
+                                # ✅ التعديل هنا: إذا كان حارساً وليس صاحب المادة
+                                cell_content_parts.append("(تكليف بحراسة)")
+                        elif is_owner:
+                            is_teaching_only = True
+                            cell_content_parts.append(f"{exam['subject']} ({exam['level']})\n(دون حراسة)")
+                
+                p = row_cells[i].paragraphs[0]; p.text = ""
+                lines = "\n---\n".join(cell_content_parts).split('\n')
+                for idx, line in enumerate(lines):
+                    if idx > 0: p.add_run().add_break()
+                    run = p.add_run(line)
+                    font = run.font; font.rtl = True; font.name = 'Arial'
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT; p.paragraph_format.rtl = True
+                
+                shading_elm = OxmlElement('w:shd')
+                if is_teaching_and_guarding:
+                    shading_elm.set(qn('w:fill'), 'D4EDDA')
+                    row_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+                elif is_teaching_only:
+                    shading_elm.set(qn('w:fill'), 'FFF3CD')
+                    row_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+        if has_any_duty:
+             doc.add_page_break()
+        else:
+            doc._body.remove(table._element)
+            doc._body.remove(heading._element)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name="جداول_الحراسة_المبسطة.docx", mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
 
 # ================== الجزء الرابع: تشغيل البرنامج ==================
 if __name__ == '__main__':

@@ -1075,6 +1075,9 @@ function displayResults(schedule) {
     <div class="final-buttons-container export-buttons-container">
         <button id="export-schedule-button" class="action-button export-btn">تصدير جداول الامتحانات (Excel)</button>
         <button id="export-prof-button" class="action-button export-btn">تصدير جداول الأساتذة (Excel)</button>
+        <button id="export-schedule-word-button" class="action-button export-btn" style="background-color: #2a5599;">تصدير جداول الامتحانات (Word)</button>
+        <button id="export-prof-word-button" class="action-button export-btn" style="background-color: #2a5599;">تصدير جداول الأساتذة (Word)</button>
+        <button id="export-prof-anonymous-word-button" class="action-button export-btn" style="background-color: #5a9955;">تصدير جداول الأساتذة (مُبسَّط)</button>
     </div>
 
     <div id="balance-report-area"></div>
@@ -1096,6 +1099,9 @@ function displayResults(schedule) {
 
     document.getElementById('export-schedule-button').addEventListener('click', exportSchedule);
     document.getElementById('export-prof-button').addEventListener('click', exportProfSchedule);
+    document.getElementById('export-schedule-word-button').addEventListener('click', exportScheduleWord);
+    document.getElementById('export-prof-word-button').addEventListener('click', exportProfScheduleWord);
+    document.getElementById('export-prof-anonymous-word-button').addEventListener('click', exportProfScheduleAnonymous);
     
     setupResultsSearch();
 
@@ -2389,3 +2395,119 @@ function displayCalculationResults(results) {
 }
 
 // ============== نهاية: منطق أداة حساب التوزيع العادل ==============
+
+// أضف هذا الكود في نهاية ملف script.js
+
+async function exportScheduleWord() {
+    if (!lastGeneratedSchedule) {
+        alert("يرجى إنشاء جدول أولاً قبل التصدير.");
+        return;
+    }
+    const button = document.getElementById('export-schedule-word-button');
+    button.disabled = true;
+    button.textContent = 'جاري التصدير...';
+
+    try {
+        const response = await fetch('/api/export/word/all-exams', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(lastGeneratedSchedule)
+        });
+
+        if (!response.ok) throw new Error('فشل التصدير من الخادم');
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = 'جداول_الامتحانات.docx';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+    } catch (err) {
+        alert('حدث خطأ أثناء تصدير الملف.');
+        console.error(err);
+    } finally {
+        button.disabled = false;
+        button.textContent = 'تصدير جداول الامتحانات (Word)';
+    }
+}
+
+async function exportProfScheduleWord() {
+    if (!lastGeneratedSchedule) {
+        alert("يرجى إنشاء جدول أولاً قبل التصدير.");
+        return;
+    }
+    const button = document.getElementById('export-prof-word-button');
+    button.disabled = true;
+    button.textContent = 'جاري التصدير...';
+
+    try {
+        const response = await fetch('/api/export/word/all-profs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(lastGeneratedSchedule)
+        });
+
+        if (!response.ok) throw new Error('فشل التصدير من الخادم');
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = 'جداول_الحراسة_للأساتذة.docx';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+    } catch (err) {
+        alert('حدث خطأ أثناء تصدير الملف.');
+        console.error(err);
+    } finally {
+        button.disabled = false;
+        button.textContent = 'تصدير جداول الأساتذة (Word)';
+    }
+}
+
+async function exportProfScheduleAnonymous() {
+    if (!lastGeneratedSchedule) {
+        alert("يرجى إنشاء جدول أولاً قبل التصدير.");
+        return;
+    }
+    const button = document.getElementById('export-prof-anonymous-word-button');
+    button.disabled = true;
+    button.textContent = 'جاري التصدير...';
+
+    try {
+        const response = await fetch('/api/export/word/all-profs-anonymous', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(lastGeneratedSchedule)
+        });
+
+        if (!response.ok) throw new Error('فشل التصدير من الخادم');
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = 'جداول_الحراسة_المبسطة.docx';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+    } catch (err) {
+        alert('حدث خطأ أثناء تصدير الملف.');
+        console.error(err);
+    } finally {
+        button.disabled = false;
+        button.textContent = 'تصدير جداول الأساتذة (مُبسَّط)';
+    }
+}
