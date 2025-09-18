@@ -852,3 +852,31 @@ button:hover { background-color: #303f9f; }
     gap: 10px;
     padding-bottom: 1px; /* لضمان محاذاة الأزرار مع الحقول */
 }
+
+/* ✅ بداية الكود المحدث: لنقل زر إيقاف الخادم إلى اليسار فقط */
+
+.final-buttons-container {
+    align-items: center;
+}
+
+.push-left {
+    margin-right: auto; /* هذا السطر ينقل الزر إلى أقصى اليسار */
+}
+
+/* ✅ نهاية الكود المحدث */
+
+/* --- تنسيقات الأزرار الثانوية (التصدير والاستيراد اليدوي) --- */
+.secondary-buttons-container {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 15px; /* لإضافة مسافة تحت الأزرار الرئيسية */
+}
+
+.secondary-action-btn {
+    width: auto; /* السماح للعرض بأن يكون تلقائياً حسب النص */
+    padding: 8px 16px; /* تقليل الحشو لجعل الزر أصغر */
+    font-size: 14px; /* تقليل حجم الخط */
+    font-weight: normal; /* جعل الخط أقل سماكة من الأزرار الرئيسية */
+    flex-grow: 0; /* منع الزر من التمدد لملء المساحة */
+}

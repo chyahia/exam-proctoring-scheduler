@@ -18,7 +18,6 @@
             <div class="header-buttons">
                 <button id="about-button" class="header-btn">عن البرنامج</button>
                 <button id="help-button" class="header-btn">المساعدة</button>
-                <button id="shutdown-server-btn" class="header-btn" style="background-color: #c82333;">إيقاف الخادم</button>
             </div>
             <h1>برنامج توزيع حراسة الامتحانات</h1>
         </header>
@@ -246,6 +245,44 @@
                         <h5 style="margin-top:0; margin-bottom: 10px;">استراتيجية الموازنة والتوزيع:</h5>
                         <div id="balancing-strategy-options-container">
 
+                        <div class="form-group">
+                            <label for="refinement-passes">
+                                عدد جولات التحسين (للاستراتيجيات المتقدمة):
+                                <i class="fas fa-info-circle" title="عدد المرات التي ستُكرر فيها الخوارزمية عملية التحسين بالكامل. قيمة أعلى قد تعطي نتائج أفضل في تجميع المواد ولكنها تستغرق وقتاً أطول. القيمة 1 تعادل التشغيل العادي."></i>
+                            </label>
+                            <input type="number" class="form-control" id="refinement-passes" value="3" min="1" max="5">
+                        </div>
+                            
+                            <label style="background-color: #d1e7fd; border: 2px solid #007bff;">
+                                <input type="radio" name="balancing_strategy" value="unified_lns">
+                                <strong>المحرك الشامل (LNS المحسِّن)</strong>
+                                <span class="strategy-description">أقوى خوارزمية، تقوم بتوزيع المواد والحراسة معًا (موصى به للمشاكل المعقدة).</span>
+                            </label>
+                            <div id="unified-lns-params-label" class="strategy-params">
+                                <label>عدد الدورات: <input type="number" id="lns-unified-iterations" value="250" step="50" min="50" class="inline-input"></label>
+                                <label>معامل التخريب (0.1 - 0.5): <input type="number" id="lns-unified-destroy-fraction" value="0.25" step="0.05" min="0.1" max="0.5" class="inline-input"></label>
+                            </div>
+
+                            <label style="background-color: #fffde7; border: 2px solid #ffc107;">
+                                <input type="radio" name="balancing_strategy" value="hyper_heuristic">
+                                <strong>النظام الخبير (Hyper-Heuristic)</strong>
+                                <span class="strategy-description">نظام ذكي يختار تلقائياً أفضل خوارزمية (من الخيارات المحددة أدناه) في كل خطوة لحل المشاكل بفعالية.</span>
+                            </label>
+                            <div id="hyper-heuristic-params-label" class="strategy-params">
+                                <label>عدد الدورات الكلية: <input type="number" id="hh-iterations" value="50" step="5" min="5" class="inline-input"></label>
+                                <label>مدة حظر الخوارزمية (Tabu Tenure): <input type="number" id="hh-tabu-tenure" value="3" step="1" min="1" max="5" class="inline-input"></label>
+                                <label>حد الركود (بالثواني): <input type="number" id="hh-stagnation-seconds" value="15" step="5" min="5" class="inline-input"></label>
+                                <hr>
+                                <h6 style="margin-bottom: 5px;">الخوارزميات المتاحة للنظام الخبير:</h6>
+                                <div class="halls-checkbox-group">
+                                    <label><input type="checkbox" name="hh_llh" value="unified_lns" checked> المحرك الشامل</label>
+                                    <label><input type="checkbox" name="hh_llh" value="tabu_search" checked> البحث المحظور</label>
+                                    <label><input type="checkbox" name="hh_llh" value="lns" checked> LNS</label>
+                                    <label><input type="checkbox" name="hh_llh" value="vns" checked> VNS</label>
+                                </div>
+                            </div>
+                            
+
                             <label style="background-color: #e0f2f1; border-color: #b2dfdb;">
                                 <input type="radio" name="balancing_strategy" value="lns">
                                 <strong>البحث الجواري الواسع (LNS)</strong>
@@ -421,8 +458,19 @@
                 <div class="final-buttons-container">
                     <button id="save-settings-button" class="action-button save-btn">💾 حفظ الإعدادات</button>
                     <button id="generate-schedule-button" class="action-button generate-btn">🚀 إنشاء جدول الحراسة الآن</button>
+                    <button id="stop-algorithm-btn" class="action-button generate-btn" style="display: none;">🛑 إيقاف الخوارزمية</button>
                 </div>
-            </div>
+
+                <div class="secondary-buttons-container">
+                    <button id="export-manual-dist-btn" class="action-button secondary-action-btn" style="background-color: #5c6bc0;">📤 تصدير مخطط المواد</button>
+                    <button id="import-manual-dist-btn" class="action-button secondary-action-btn" style="background-color: #26a69a;">📥 استيراد المخطط</button>
+                    <button id="clear-manual-dist-btn" class="action-button secondary-action-btn" style="background-color: #6c757d;">🔄 العودة للوضع التلقائي</button>
+                </div>
+                
+                <input type="file" id="import-manual-dist-input" style="display: none;" accept=".xlsx">
+                <p id="manual-dist-status" style="text-align: center; margin-top: 10px; font-weight: bold; color: green;"></p>
+                </div>
+            
             <div id="results-container" class="setting-block" style="display: none;">
                 <div id="stats-dashboard-container" class="stats-dashboard-container" style="display: none;">
                     <h3>لوحة المعلومات الإحصائية</h3>
@@ -435,16 +483,15 @@
         <section id="backup-restore-section">
             <h2>المرحلة 6: النسخ الاحتياطي والاستعادة</h2>
             <div class="setting-block">
-                 <p class="description">استخدم هذه الأزرار لحفظ كل بيانات البرنامج (بما في ذلك الإعدادات) في ملف واحد، أو استعادة البيانات من ملف نسخة احتياطية.</p>
+                <p class="description">استخدم هذه الأزرار لحفظ كل بيانات البرنامج (بما في ذلك الإعدادات) في ملف واحد، أو استعادة البيانات من ملف نسخة احتياطية.</p>
                 <div class="final-buttons-container">
                     <button id="backup-btn" class="action-button backup-btn">💾 تصدير نسخة احتياطية</button>
                     <button id="restore-btn" class="action-button restore-btn">📂 استيراد نسخة احتياطية</button>
+                    <button id="reset-all-btn" class="action-button reset-btn">مسح كل البيانات</button>
+                    
+                    <button id="shutdown-server-btn" class="action-button push-left" style="background-color: #c82333;">❌ إيقاف الخادم</button>
                 </div>
                 <input type="file" id="restore-file-input" style="display: none;" accept=".json">
-                
-                <div class="final-buttons-container" style="margin-top: 20px;">
-                    <button id="reset-all-btn" class="action-button reset-btn">مسح كل البيانات والبدء من جديد</button>
-                </div>
             </div>
         </section>
 

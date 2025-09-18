@@ -43,6 +43,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setupCustomTargetListeners();
     setupDataImportExportListeners();
     setupBalancingStrategyListener(); 
+    setupManualDistributionListeners();
+    setupStopButtonListener();
 });
 
 function setupHeaderButtons() {
@@ -94,10 +96,12 @@ function setupBalancingStrategyListener() {
     const polishingSwapLabel = document.getElementById('polishing-swaps-label');
     const annealingParamsLabel = document.getElementById('annealing-params-label');
     const solverTimelimitLabel = document.getElementById('solver-timelimit-label');
-    const geneticParamsLabel = document.getElementById('genetic-params-label'); // <<< إضافة جديدة
+    const geneticParamsLabel = document.getElementById('genetic-params-label');
     const tabuParamsLabel = document.getElementById('tabu-params-label');
     const lnsParamsLabel = document.getElementById('lns-params-label');
     const vnsParamsLabel = document.getElementById('vns-params-label');
+    const unifiedLnsParamsLabel = document.getElementById('unified-lns-params-label');
+    const hyperHeuristicParamsLabel = document.getElementById('hyper-heuristic-params-label');
     const radioButtons = document.querySelectorAll('input[name="balancing_strategy"]');
 
     function toggleInputs(strategy) {
@@ -110,6 +114,8 @@ function setupBalancingStrategyListener() {
         tabuParamsLabel.style.display = 'none';
         lnsParamsLabel.style.display = 'none';
         vnsParamsLabel.style.display = 'none';
+        unifiedLnsParamsLabel.style.display = 'none';
+        hyperHeuristicParamsLabel.style.display = 'none';
 
         // إظهار الخانة المناسبة بناءً على الاختيار
         if (strategy === 'advanced') {
@@ -128,6 +134,10 @@ function setupBalancingStrategyListener() {
             lnsParamsLabel.style.display = 'block';
         } else if (strategy === 'vns') {
             vnsParamsLabel.style.display = 'block';
+        } else if (strategy === 'unified_lns') {
+            unifiedLnsParamsLabel.style.display = 'block';
+        } else if (strategy === 'hyper_heuristic') {
+            hyperHeuristicParamsLabel.style.display = 'block';
         }
     }
 
@@ -827,6 +837,20 @@ function collectAllData() {
     const lnsDestroyFraction = document.getElementById('lns-destroy-fraction').value;
     const vnsIterations = document.getElementById('vns-iterations').value;
     const vnsMaxK = document.getElementById('vns-max-k').value;
+    const refinementPasses = parseInt(document.getElementById('refinement-passes').value) || 3;
+    const lnsUnifiedIterations = document.getElementById('lns-unified-iterations').value;
+    const lnsUnifiedDestroyFraction = document.getElementById('lns-unified-destroy-fraction').value;
+    const hhIterations = document.getElementById('hh-iterations').value;
+    const hhTabuTenure = document.getElementById('hh-tabu-tenure').value;
+    const hhStagnationSeconds = document.getElementById('hh-stagnation-seconds').value; // ✨ تعديل هنا
+    const selectedLLH = Array.from(document.querySelectorAll('input[name="hh_llh"]:checked')).map(cb => cb.value);
+
+    const hyperHeuristicSettings = {
+        iterations: hhIterations,
+        tabuTenure: hhTabuTenure,
+        stagnationTimeLimit: hhStagnationSeconds,
+        selectedLLH: selectedLLH
+    };
 
     return { 
         dutyPatterns, levelHallAssignments, examSchedule, unavailableDays,
@@ -843,7 +867,7 @@ function collectAllData() {
         solverTimelimit,
         geneticPopulation,
         geneticGenerations,
-        geneticElitism, // <-- إضافة المتغير الجديد هنا
+        geneticElitism,
         geneticMutation,
         tabuIterations,
         tabuTenure,
@@ -852,7 +876,11 @@ function collectAllData() {
         lnsIterations,
         lnsDestroyFraction,
         vnsIterations,
-        vnsMaxK
+        vnsMaxK,
+        refinementPasses,
+        lnsUnifiedIterations,
+        lnsUnifiedDestroyFraction,
+        hyperHeuristicSettings
     };
 }
 
@@ -892,6 +920,7 @@ async function collectAndSendData() {
     await autoSaveSettings();
     const resultsContainer = document.getElementById('results-container');
     const generateBtn = document.getElementById('generate-schedule-button');
+    const stopBtn = document.getElementById('stop-algorithm-btn');
     const logContainer = document.getElementById('live-log-container');
     const logOutput = document.getElementById('live-log-output');
 
@@ -902,6 +931,9 @@ async function collectAndSendData() {
     if (eventSource && eventSource.readyState !== EventSource.CLOSED) {
         eventSource.close();
     }
+
+    generateBtn.style.display = 'none';
+    stopBtn.style.display = 'inline-block';
 
     logContainer.classList.remove('hidden');
     // --- إضافة جديدة: إظهار شريط التقدم وإعادة تعيينه ---
@@ -940,6 +972,10 @@ async function collectAndSendData() {
         
         if (event.data.startsWith("DONE")) {
             eventSource.close();
+            generateBtn.style.display = 'inline-block';
+            stopBtn.style.display = 'none';
+            stopBtn.disabled = false;
+            stopBtn.textContent = '🛑 إيقاف الخوارزمية';
             // --- إضافة جديدة: إخفاء شريط التقدم عند الانتهاء ---
             progressBarContainer.classList.add('hidden');
 
@@ -980,6 +1016,10 @@ async function collectAndSendData() {
         eventSource.close();
         generateBtn.disabled = false;
         generateBtn.textContent = '🚀 إنشاء جدول الحراسة الآن';
+        generateBtn.style.display = 'inline-block';
+        stopBtn.style.display = 'none';
+        stopBtn.disabled = false;
+        stopBtn.textContent = '🛑 إيقاف الخوارزمية';
         // --- إضافة جديدة: إخفاء شريط التقدم عند الخطأ ---
         progressBarContainer.classList.add('hidden');
     };
@@ -1470,6 +1510,15 @@ function populateUIWithSettings(settings) {
     if (settings.vnsMaxK !== undefined) {
         document.getElementById('vns-max-k').value = settings.vnsMaxK;
     }
+    if (settings.refinementPasses !== undefined) {
+        document.getElementById('refinement-passes').value = settings.refinementPasses;
+    }
+    if (settings.lnsUnifiedIterations !== undefined) {
+    document.getElementById('lns-unified-iterations').value = settings.lnsUnifiedIterations;
+    }
+    if (settings.lnsUnifiedDestroyFraction !== undefined) {
+        document.getElementById('lns-unified-destroy-fraction').value = settings.lnsUnifiedDestroyFraction;
+    }
     setupProfessorPartnershipsUI(settings, availableProfessors);
 }
 
@@ -1845,7 +1894,108 @@ function setupDataImportExportListeners() {
     });
 }
 
-// في ملف script.js، استبدل هذه الدالة بالكامل
+function setupManualDistributionListeners() {
+    const exportBtn = document.getElementById('export-manual-dist-btn');
+    const importBtn = document.getElementById('import-manual-dist-btn');
+    const fileInput = document.getElementById('import-manual-dist-input');
+    const statusP = document.getElementById('manual-dist-status');
+    const clearBtn = document.getElementById('clear-manual-dist-btn');
+
+    exportBtn.addEventListener('click', async () => {
+        statusP.textContent = '';
+        const originalText = exportBtn.textContent;
+        exportBtn.textContent = '⏳ جاري إنشاء الملف...';
+        exportBtn.disabled = true;
+
+        try {
+            // نجمع الإعدادات الحالية لأنها تؤثر على توزيع المواد
+            const settings = collectAllData();
+            const response = await fetch('/api/export-manual-distribution-template', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+            if (!response.ok) throw new Error('فشل التصدير من الخادم');
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'مخطط_توزيع_المواد.xlsx';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            showNotification("تم تصدير الملف بنجاح. يمكنك الآن تعديله.", "success");
+
+        } catch (error) {
+            handleError(error);
+        } finally {
+            exportBtn.textContent = originalText;
+            exportBtn.disabled = false;
+        }
+    });
+
+    importBtn.addEventListener('click', () => {
+        statusP.textContent = '';
+        fileInput.click();
+    });
+
+    fileInput.addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        fetch('/api/import-manual-distribution', {
+            method: 'POST',
+            body: formData,
+        })
+        .then(handleResponse)
+        .then(data => {
+            showNotification(data.message, 'success');
+            statusP.textContent = data.message; // عرض الرسالة بشكل دائم
+        })
+        .catch(error => {
+            statusP.textContent = `خطأ: ${error.message}`;
+            statusP.style.color = 'red';
+        })
+        .finally(() => {
+            fileInput.value = ''; // لإعادة تعيين حقل الإدخال
+        });
+    });
+
+    clearBtn.addEventListener('click', () => {
+        if (!confirm("هل أنت متأكد؟ سيؤدي هذا إلى حذف الجدول اليدوي الذي استوردته والعودة إلى وضع التوزيع التلقائي للمواد.")) {
+            return;
+        }
+
+        fetch('/api/clear-manual-distribution', { method: 'POST' })
+        .then(handleResponse)
+        .then(data => {
+            showNotification(data.message, 'success');
+            statusP.textContent = data.message;
+            statusP.style.color = '#007bff'; // لون أزرق للمعلومات
+
+            // إعادة تفعيل خانة تجميع المواد
+            const groupSubjectsCheckbox = document.getElementById('group-subjects-checkbox');
+            const groupSubjectsLabel = groupSubjectsCheckbox.parentElement;
+            if (groupSubjectsCheckbox) {
+                groupSubjectsCheckbox.disabled = false;
+                groupSubjectsLabel.style.backgroundColor = '#e3f2fd';
+                groupSubjectsLabel.style.borderColor = '#90caf9';
+                groupSubjectsLabel.style.cursor = 'pointer';
+                groupSubjectsLabel.title = '';
+                groupSubjectsLabel.innerHTML = `
+                    <input type="checkbox" id="group-subjects-checkbox" style="vertical-align: middle; margin-left: 8px;" checked>
+                    <strong>تفعيل المرحلة 1.5:</strong> محاولة تجميع مواد الأستاذ الواحد في أقل عدد من الأيام
+                `;
+            }
+        })
+        .catch(handleError);
+    });
+}
 
 // في ملف script.js، استبدل هذه الدالة بالكامل
 
@@ -2510,4 +2660,28 @@ async function exportProfScheduleAnonymous() {
         button.disabled = false;
         button.textContent = 'تصدير جداول الأساتذة (مُبسَّط)';
     }
+}
+
+// أضف هذه الدالة الجديدة
+function setupStopButtonListener() {
+    const stopBtn = document.getElementById('stop-algorithm-btn');
+    if (!stopBtn) return;
+
+    stopBtn.addEventListener('click', () => {
+        stopBtn.disabled = true;
+        stopBtn.textContent = '⏳ جاري الإيقاف...';
+
+        fetch('/api/stop-algorithm', { method: 'POST' })
+            .then(handleResponse)
+            .then(data => {
+                showNotification(data.message, 'success');
+                // لا نغير حالة الزر هنا، ننتظر رسالة DONE من الخادم
+            })
+            .catch(error => {
+                handleError(error);
+                // في حالة فشل طلب الإيقاف، نعيد تفعيل الزر
+                stopBtn.disabled = false;
+                stopBtn.textContent = '🛑 إيقاف الخوارزمية';
+            });
+    });
 }
