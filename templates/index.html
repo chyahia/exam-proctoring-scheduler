@@ -325,17 +325,6 @@
                                 <input type="number" id="solver-timelimit" value="30" min="5" max="300" step="5" class="inline-input">
                             </label>
 
-                            <label style="background-color: #fce8e6; border-color: #f5c6cb;">
-                                <input type="radio" name="balancing_strategy" value="annealing">
-                                <strong>التلدين المحاكي (تجريبي)</strong>
-                                <span class="strategy-description">خوارزمية متقدمة لاستكشاف الحلول بذكاء، قد تكون بطيئة لكنها الأقوى.</span>
-                            </label>
-                            <div id="annealing-params-label" class="strategy-params">
-                                <label>درجة الحرارة الأولية: <input type="number" id="annealing-temp" value="1000" class="inline-input"></label>
-                                <label>معدل التبريد: <input type="number" id="annealing-cooling" value="0.995" step="0.001" min="0.8" max="0.999" class="inline-input"></label>
-                                <label>عدد المحاولات: <input type="number" id="annealing-iterations" value="1000" step="100" class="inline-input"></label>
-                            </div>
-
                             <label style="background-color: #e3f2fd; border-color: #90caf9;">
                                 <input type="radio" name="balancing_strategy" value="tabu_search">
                                 <strong>البحث المحظور (تجريبي)</strong>
@@ -356,24 +345,6 @@
                                 <input type="number" id="swap-attempts-count" value="50" min="10" max="500" step="10" class="inline-input">
                             </label>
 
-                            <label style="background-color: #d1e7fd; border-color: #b8daff;">
-                                <input type="radio" name="balancing_strategy" value="phased_polished">
-                                <strong>التوزيع المرحلي (مع صقل)</strong>
-                            </label>
-                            <label id="polishing-swaps-label" class="strategy-params">
-                                عدد محاولات الصقل:
-                                <input type="number" id="polishing-swaps-count" value="15" min="0" max="100" step="5" class="inline-input">
-                            </label>
-
-                            <label style="background-color: #ffeeba; border-color: #ffdf7e;">
-                                <input type="radio" name="balancing_strategy" value="phased">
-                                <strong>التوزيع المرحلي (العشوائي فقط)</strong>
-                            </label>
-
-                            <label style="background-color: #f8f9fa; border-color: #ddd;">
-                                <input type="radio" name="balancing_strategy" value="standard">
-                                <strong>التوزيع العادي</strong>
-                            </label>
                         </div>
                     </div>
                     ```

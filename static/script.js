@@ -93,8 +93,6 @@ document.getElementById('shutdown-server-btn').addEventListener('click', () => {
 
 function setupBalancingStrategyListener() {
     const advancedSwapLabel = document.getElementById('swap-attempts-label');
-    const polishingSwapLabel = document.getElementById('polishing-swaps-label');
-    const annealingParamsLabel = document.getElementById('annealing-params-label');
     const solverTimelimitLabel = document.getElementById('solver-timelimit-label');
     const geneticParamsLabel = document.getElementById('genetic-params-label');
     const tabuParamsLabel = document.getElementById('tabu-params-label');
@@ -107,10 +105,8 @@ function setupBalancingStrategyListener() {
     function toggleInputs(strategy) {
         // إخفاء كل الخانات الإضافية أولاً
         advancedSwapLabel.style.display = 'none';
-        polishingSwapLabel.style.display = 'none';
-        annealingParamsLabel.style.display = 'none';
         solverTimelimitLabel.style.display = 'none';
-        geneticParamsLabel.style.display = 'none'; // <<< إضافة جديدة
+        geneticParamsLabel.style.display = 'none';
         tabuParamsLabel.style.display = 'none';
         lnsParamsLabel.style.display = 'none';
         vnsParamsLabel.style.display = 'none';
@@ -120,10 +116,6 @@ function setupBalancingStrategyListener() {
         // إظهار الخانة المناسبة بناءً على الاختيار
         if (strategy === 'advanced') {
             advancedSwapLabel.style.display = 'block';
-        } else if (strategy === 'phased_polished') {
-            polishingSwapLabel.style.display = 'block';
-        } else if (strategy === 'annealing') {
-            annealingParamsLabel.style.display = 'block';
         } else if (strategy === 'constraint_solver') {
             solverTimelimitLabel.style.display = 'block';
         } else if (strategy === 'genetic') { // <<< إضافة جديدة
@@ -817,11 +809,9 @@ function collectAllData() {
     const lastDayRestriction = document.querySelector('input[name="last_day_restriction"]:checked').value; 
     const balancingStrategy = document.querySelector('input[name="balancing_strategy"]:checked').value;
     const swapAttempts = document.getElementById('swap-attempts-count').value;
-    const polishingSwaps = document.getElementById('polishing-swaps-count').value;
+    
     const enableCustomTargets = document.getElementById('enable-custom-targets-checkbox').checked;
-    const annealingTemp = document.getElementById('annealing-temp').value;
-    const annealingCooling = document.getElementById('annealing-cooling').value;
-    const annealingIterations = document.getElementById('annealing-iterations').value;
+    
     const solverTimelimit = document.getElementById('solver-timelimit').value;
 
     // --- الجزء الذي تم تصحيحه ---
@@ -860,10 +850,6 @@ function collectAllData() {
         guardsMediumHall, guardsSmallHall, enableCustomTargets, customTargetPatterns,
         balancingStrategy,
         swapAttempts,
-        polishingSwaps,
-        annealingTemp,
-        annealingCooling,
-        annealingIterations,
         solverTimelimit,
         geneticPopulation,
         geneticGenerations,
@@ -1452,18 +1438,6 @@ function populateUIWithSettings(settings) {
 
     if (settings.swapAttempts !== undefined) {
         document.getElementById('swap-attempts-count').value = settings.swapAttempts;
-    }
-    if (settings.polishingSwaps !== undefined) {
-        document.getElementById('polishing-swaps-count').value = settings.polishingSwaps;
-    }
-    if (settings.annealingTemp !== undefined) {
-        document.getElementById('annealing-temp').value = settings.annealingTemp;
-    }
-    if (settings.annealingCooling !== undefined) {
-        document.getElementById('annealing-cooling').value = settings.annealingCooling;
-    }
-    if (settings.annealingIterations !== undefined) {
-        document.getElementById('annealing-iterations').value = settings.annealingIterations;
     }
     if (settings.solverTimelimit !== undefined) {
         document.getElementById('solver-timelimit').value = settings.solverTimelimit;

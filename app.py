@@ -667,147 +667,203 @@ def run_post_processing_swaps(schedule, prof_assignments, prof_workload, prof_la
             
     return temp_schedule, temp_assignments, temp_workload, temp_large_counts
 
-# في ملف app.py، قم باستبدال هذه الدالة بالكامل
+# =====================================================================================
+# START: FINAL BALANCER V3 (Simulated Annealing for Global Optimization)
+# =====================================================================================
 
-def run_simulated_annealing(schedule, prof_assignments, prof_workload, prof_large_counts, settings, all_professors, date_map, duty_patterns, annealing_iterations, annealing_temp, annealing_cooling):
+def run_simulated_annealing_balancer(schedule, settings, all_professors, duty_patterns, date_map, locked_guards=set(), stop_event=None, log_q=None):
     """
-    النسخة النهائية والمحسنة.
-    تستهدف الأنماط المخصصة إذا كانت مفعلة، وإلا تقوم بالموازنة العامة.
+    (النسخة النهائية V3)
+    تستخدم خوارزمية "التلدين المحاكي" للهروب من الحلول المثلى المحلية وتحقيق أفضل توازن ممكن.
+    تضمن هذه النسخة عدم خرق أي قيود صارمة على الإطلاق.
     """
-    # --- استخلاص الإعدادات ---
-    large_hall_weight = float(settings.get('largeHallWeight', 3.0))
-    other_hall_weight = float(settings.get('otherHallWeight', 1.0))
-    enable_custom_targets = settings.get('enableCustomTargets', False)
+    if log_q: log_q.put("... [صقل نهائي] تشغيل موازنة التلدين المحاكي الذكية...")
+
+    # --- 1. استخلاص الإعدادات والتحقق ---
     custom_target_patterns = settings.get('customTargetPatterns', [])
-    guards_large_hall = int(settings.get('guardsLargeHall', 4))
+    if not custom_target_patterns:
+        return schedule # لا يمكن التشغيل بدون أهداف مخصصة
 
-    # --- تحديد دالة الطاقة التي سنستخدمها ---
-    energy_function = None
-
-    if enable_custom_targets and custom_target_patterns:
-        # الهدف: تقليل الانحراف عن الأنماط المستهدفة
-        target_counts = Counter((p['large'], p['other']) for p in custom_target_patterns for _ in range(p.get('count', 0)))
-        all_target_patterns = set(target_counts.keys())
-
-        def calculate_pattern_deviation_energy(sch):
-            prof_stats = {prof: {'large': 0, 'other': 0} for prof in all_professors}
-            all_exams = [exam for date_slots in sch.values() for time_slots in date_slots.values() for exam in time_slots]
-            for exam in all_exams:
-                guards_copy = [g for g in exam.get('guards', []) if g != "**نقص**"]
-                large_guards_needed = sum(guards_large_hall for h in exam.get('halls', []) if h.get('type') == 'كبيرة')
-                large_hall_guards = guards_copy[:large_guards_needed]
-                other_hall_guards = guards_copy[large_guards_needed:]
-                for guard in large_hall_guards:
-                    if guard in prof_stats: prof_stats[guard]['large'] += 1
-                for guard in other_hall_guards:
-                    if guard in prof_stats: prof_stats[guard]['other'] += 1
-            
-            actual_counts = Counter((s['large'], s['other']) for s in prof_stats.values())
-            
-            total_deviation = 0
-            all_current_patterns = set(actual_counts.keys()) | all_target_patterns
-            for pattern in all_current_patterns:
-                total_deviation += abs(actual_counts.get(pattern, 0) - target_counts.get(pattern, 0))
-            
-            return total_deviation
-        
-        energy_function = calculate_pattern_deviation_energy
-
-    else:
-        # الهدف الافتراضي: الموازنة العامة
-        def calculate_workload_energy(sch):
-            workload_dict = defaultdict(float)
-            all_exams = [exam for date_slots in sch.values() for time_slots in date_slots.values() for exam in time_slots]
-            for exam in all_exams:
-                 is_large_exam = any(h['type'] == 'كبيرة' for h in exam.get('halls', []))
-                 duty_weight = large_hall_weight if is_large_exam else other_hall_weight
-                 for guard in exam.get('guards', []):
-                     if guard != "**نقص**" and guard in all_professors:
-                         workload_dict[guard] += duty_weight
-            
-            if not workload_dict: return 0.0
-            workloads = list(workload_dict.values())
-            return max(workloads) - min(workloads)
-
-        energy_function = calculate_workload_energy
-
-    # --- إعدادات الحالة الأولية ---
-    current_schedule = copy.deepcopy(schedule)
-    current_energy = energy_function(current_schedule)
+    iterations = int(settings.get('swapAttempts', 100)) * 5 # زيادة كبيرة في المحاولات لهذه الخوارزمية القوية
+    initial_temp = 10.0
+    cooling_rate = 0.995 # معدل تبريد بطيء لاستكشاف أفضل
     
-    best_schedule = copy.deepcopy(current_schedule)
-    best_energy = current_energy
+    target_counts = Counter((p['large'], p['other']) for p in custom_target_patterns for _ in range(p.get('count', 0)))
 
-    temp = annealing_temp
+    # --- 2. الإعدادات الأولية للبحث ---
+    current_solution = copy.deepcopy(schedule)
+    best_solution_so_far = copy.deepcopy(schedule)
     
-    # --- حلقة التلدين المحاكي الرئيسية ---
-    for i in range(annealing_iterations):
-        if temp < 0.01: break
+    # دالة مساعدة داخلية لحساب الحالة الحالية
+    def get_current_stats(sch):
+        prof_stats = {prof: {'large': 0, 'other': 0} for prof in all_professors}
+        guards_large_hall = int(settings.get('guardsLargeHall', 4))
+        for exam in (e for day in sch.values() for slot in day.values() for e in slot):
+            guards_copy = [g for g in exam.get('guards', []) if g != "**نقص**"]
+            large_guards_needed = sum(guards_large_hall for h in exam.get('halls', []) if h.get('type') == 'كبيرة')
+            for idx, guard in enumerate(guards_copy):
+                if guard in prof_stats:
+                    if idx < large_guards_needed: prof_stats[guard]['large'] += 1
+                    else: prof_stats[guard]['other'] += 1
+        return prof_stats
 
-        all_duties = [{'exam': ex, 'guard': g, 'idx': g_idx} 
-                      for ex_list in current_schedule.values() 
-                      for exs in ex_list.values() for ex in exs 
-                      for g_idx, g in enumerate(ex.get('guards', [])) if g != "**نقص**"]
+    # حساب الانحراف
+    def get_deviation(stats):
+        actual_counts = Counter((s['large'], s['other']) for s in stats.values())
+        all_p = set(target_counts.keys()) | set(actual_counts.keys())
+        # ✅ توحيد الحساب ليطابق دالة التكلفة الرئيسية
+        return sum(abs(actual_counts.get(p, 0) - target_counts.get(p, 0)) for p in all_p) * 2.0
 
+    current_stats = get_current_stats(current_solution)
+    current_deviation = get_deviation(current_stats)
+    best_deviation_so_far = current_deviation
+    
+    temp = initial_temp
+
+    # --- 3. حلقة التلدين المحاكي الرئيسية ---
+    for i in range(iterations):
+        if log_q: log_q.put(f"PROGRESS:{int(((i + 1) / iterations) * 100)}")
+        if stop_event and stop_event.is_set(): break
+        if temp < 0.01: break # توقف إذا بردت الحرارة تماماً
+
+        # --- 4. إنشاء "حركة" أو "تبديل" عشوائي ---
+        # هذا يجعل البحث غير متوقع ويساعد على استكشاف الحلول بشكل أفضل
+        all_duties = [(exam, g, idx) for exam in (exam for day in current_solution.values() for slot in day.values() for exam in slot) for idx, g in enumerate(exam.get('guards',[])) if g != "**نقص**" and (exam.get('uuid'), g) not in locked_guards]
         if not all_duties: break
+        
+        exam_to_swap, prof_donor, guard_idx = random.choice(all_duties)
+        
+        possible_recipients = [p for p in all_professors if p != prof_donor and p not in exam_to_swap.get('guards',[])]
+        if not possible_recipients: continue
+        prof_recipient = random.choice(possible_recipients)
 
-        duty_to_change = random.choice(all_duties)
-        exam = duty_to_change['exam']
-        prof1 = duty_to_change['guard']
-        guard_idx = duty_to_change['idx']
+        # --- 5. التحقق الشامل من صحة التبديل (حل المشكلة الأولى) ---
+        neighbor_solution = copy.deepcopy(current_solution)
+        # العثور على نسخة الامتحان في الحل الجديد وتطبيق التغيير
+        exam_in_neighbor = next(e for e in neighbor_solution[exam_to_swap['date']][exam_to_swap['time']] if e.get('uuid') == exam_to_swap.get('uuid'))
+        exam_in_neighbor['guards'][guard_idx] = prof_recipient
+        
+        # ✅ الضمانة المطلقة: التحقق من الجدول بأكمله بعد التبديل
+        if not is_schedule_valid(neighbor_solution, settings, all_professors, duty_patterns, date_map):
+            continue # إذا كان التبديل يخرق أي قيد، تجاهله تماماً وابدأ محاولة جديدة
 
-        possible_new_profs = [p for p in all_professors if p != prof1]
-        if not possible_new_profs: continue
-        prof2 = random.choice(possible_new_profs)
+        # --- 6. تقييم الحركة وقبولها (حل المشكلة الثانية) ---
+        neighbor_stats = get_current_stats(neighbor_solution)
+        neighbor_deviation = get_deviation(neighbor_stats)
         
-        schedule_copy = copy.deepcopy(current_schedule)
-        exam_in_copy = None
-        for date_key, time_slots in schedule_copy.items():
-            if date_key == exam['date']:
-                for time_key, exams in time_slots.items():
-                    if time_key == exam['time']:
-                        for ex_item in exams:
-                            if ex_item['subject'] == exam['subject'] and ex_item['level'] == exam['level']:
-                                exam_in_copy = ex_item
-                                break
-                if exam_in_copy: break
+        delta = neighbor_deviation - current_deviation
+
+        # معيار القبول: إما أن يكون الحل أفضل، أو يتم قبوله باحتمالية تعتمد على الحرارة
+        if delta < 0 or random.random() < (math.exp(-delta / temp) if temp > 0 else 0):
+            current_solution = neighbor_solution
+            current_deviation = neighbor_deviation
+            
+            # تحديث أفضل حل تم العثور عليه على الإطلاق
+            if current_deviation < best_deviation_so_far:
+                best_deviation_so_far = current_deviation
+                best_solution_so_far = copy.deepcopy(current_solution)
+                if log_q: log_q.put(f"... [تلدين] حل أفضل! الانحراف الجديد: {best_deviation_so_far}")
+
+        # --- 7. تبريد الحرارة ---
+        temp *= cooling_rate
+
+    if log_q: log_q.put(f"✓ انتهت موازنة التلدين المحاكي. أفضل انحراف تم الوصول إليه: {best_deviation_so_far}")
+    return best_solution_so_far
+
+# =====================================================================================
+# END: FINAL BALANCER V3
+# =====================================================================================
+
+# =====================================================================================
+# START: V2 - Advanced Polisher with more powerful moves
+# =====================================================================================
+
+def run_advanced_polisher(schedule, settings, all_professors, duty_patterns, date_map, locked_guards=set(), stop_event=None, log_q=None):
+    """
+    (النسخة V2 - المحسنة)
+    تستخدم نوعين من الحركات: تبديل مهمة واحدة (للتحسين الدقيق) وتبديل
+    مهام يوم كامل (لتحسين القيود المرنة بفعالية دون التأثير على الانحراف).
+    """
+    if log_q: log_q.put("... [صقل متقدم] بدء مرحلة تحسين القيود المرنة بأدوات قوية...")
+
+    iterations = int(settings.get('swapAttempts', 100)) * 2
+    
+    current_solution = copy.deepcopy(schedule)
+    best_cost_so_far = calculate_cost(current_solution, settings, all_professors, duty_patterns, date_map)
+    
+    sorted_dates = sorted(current_solution.keys())
+
+    for i in range(iterations):
+        if stop_event and stop_event.is_set(): break
         
-        if not exam_in_copy: continue
-        
-        exam_in_copy['guards'][guard_idx] = prof2
-        
-        if not is_schedule_valid(schedule_copy, settings, all_professors, duty_patterns, date_map):
+        neighbor_solution = copy.deepcopy(current_solution)
+        move_type = random.choice(['single_duty_swap', 'full_day_swap']) # اختر حركة بشكل عشوائي
+
+        # --- الحركة الأولى: تبديل مهمة واحدة (نفس السابق) ---
+        if move_type == 'single_duty_swap':
+            all_exams_flat = [exam for day in neighbor_solution.values() for slot in day.values() for exam in slot]
+            all_duties = [(exam, g, idx) for exam in all_exams_flat for idx, g in enumerate(exam.get('guards',[])) if g != "**نقص**" and (exam.get('uuid'), g) not in locked_guards]
+            if not all_duties: continue
+            
+            exam_to_swap, prof_donor, guard_idx = random.choice(all_duties)
+            possible_recipients = [p for p in all_professors if p != prof_donor and p not in exam_to_swap.get('guards',[])]
+            if not possible_recipients: continue
+            prof_recipient = random.choice(possible_recipients)
+
+            exam_in_neighbor = next(e for e in neighbor_solution[exam_to_swap['date']][exam_to_swap['time']] if e.get('uuid') == exam_to_swap.get('uuid'))
+            exam_in_neighbor['guards'][guard_idx] = prof_recipient
+
+        # --- الحركة الثانية: تبديل مهام يوم كامل (الجديدة والقوية) ---
+        elif move_type == 'full_day_swap':
+            if not sorted_dates: continue
+            day_to_swap = random.choice(sorted_dates)
+            
+            # ابحث عن كل الحراس الذين يعملون في هذا اليوم
+            guards_on_day = set()
+            for slot in neighbor_solution[day_to_swap].values():
+                for exam in slot:
+                    for guard in exam.get('guards', []):
+                        if guard != "**نقص**":
+                            guards_on_day.add(guard)
+            
+            if len(guards_on_day) < 2: continue
+            
+            prof1, prof2 = random.sample(list(guards_on_day), 2)
+
+            # قم بتبديل كل ظهور لـ prof1 بـ prof2 والعكس، في هذا اليوم فقط
+            for slot in neighbor_solution[day_to_swap].values():
+                for exam in slot:
+                    new_guards = []
+                    is_locked = False
+                    for guard in exam.get('guards', []):
+                        if (exam.get('uuid'), guard) in locked_guards:
+                            is_locked = True
+                            break
+                    if is_locked: continue
+
+                    for guard in exam.get('guards', []):
+                        if guard == prof1: new_guards.append(prof2)
+                        elif guard == prof2: new_guards.append(prof1)
+                        else: new_guards.append(guard)
+                    exam['guards'] = new_guards
+
+        # --- التقييم والقبول (لا تغيير هنا) ---
+        if not is_schedule_valid(neighbor_solution, settings, all_professors, duty_patterns, date_map):
             continue
 
-        new_energy = energy_function(schedule_copy)
+        new_cost = calculate_cost(neighbor_solution, settings, all_professors, duty_patterns, date_map)
         
-        if new_energy < current_energy or random.random() < math.exp((current_energy - new_energy) / temp):
-            current_schedule = schedule_copy
-            current_energy = new_energy
-            
-            if current_energy < best_energy:
-                best_energy = current_energy
-                best_schedule = copy.deepcopy(current_schedule)
-        
-        temp *= annealing_cooling
+        if new_cost < best_cost_so_far:
+            best_cost_so_far = new_cost
+            current_solution = copy.deepcopy(neighbor_solution)
+            if log_q: log_q.put(f"... [صقل متقدم] تم العثور على تحسين! التكلفة الجديدة: {format_cost_tuple(best_cost_so_far)}")
 
-    # إعادة بناء بقية بيانات الحل النهائي
-    final_assignments = defaultdict(list)
-    final_large_counts = defaultdict(int)
-    final_workload = defaultdict(float)
-    for ex_list in best_schedule.values():
-        for exs in ex_list.values():
-            for ex in exs:
-                is_large = any(h['type'] == 'كبيرة' for h in ex['halls'])
-                duty_weight = large_hall_weight if is_large else other_hall_weight
-                for g in ex.get('guards', []):
-                    if g != "**نقص**":
-                        final_assignments[g].append(ex)
-                        final_workload[g] += duty_weight
-                        if is_large:
-                            final_large_counts[g] += 1
-    
-    return best_schedule, final_assignments, final_workload, final_large_counts
+    if log_q: log_q.put(f"✓ انتهت مرحلة الصقل المتقدم. أفضل تكلفة تم الوصول إليها: {format_cost_tuple(best_cost_so_far)}")
+    return current_solution
+
+# =====================================================================================
+# END: V2 - Advanced Polisher
+# =====================================================================================
 
 # ===================================================================
 # --- START: النسخة النهائية من Tabu Search (مكتملة ومستقرة) ---
@@ -1414,93 +1470,96 @@ def calculate_deviation_from_stats(prof_stats, settings, all_professors):
     return 0.0
 
 # =====================================================================================
-# --- START: UNIFIED LNS ALGORITHM V13 (INTELLIGENT SWAPPING) ---
+# --- START: UNIFIED LNS ALGORITHM V16 (HYBRID: LNS for Repair, V13 for Optimization) ---
 # =====================================================================================
 
 def run_unified_lns_optimizer(initial_schedule, settings, all_professors, assignments, duty_patterns, date_map, all_subjects, log_q, all_levels_list, locked_guards=set(), stop_event=None):
     """
-    (النسخة V13) "التبديل الذكي"
-    - تعيد تقديم ميزة تبديل المواد ككتلة واحدة (المادة + الأستاذ) بشكل آمن.
-    - تستخدم التبديل كأداة لتحسين القيود المرنة (تجميع أيام الأستاذ).
-    - أي نقص ناتج عن التبديل يتم إصلاحه فوراً بواسطة دالة الإصلاح الشاملة.
+    (النسخة V16) "الخوارزمية الهجينة"
+    - تستدعي LNS العادية (الموثوقة) للقيام بمهمة جبر النقص أولاً.
+    - إذا نجحت، تقوم بتشغيل منطق التحسين المتقدم (V13) على الجدول الكامل.
     """
-    log_q.put(">>> بدء تشغيل مُحسِّن LNS بالتبديل الذكي (V13)...")
+    log_q.put(">>> بدء تشغيل المُحسِّن الهجين (V16)...")
 
-    # --- 1. الإعدادات ---
+    # --- الإعدادات والحل المبدئي (لا تغيير هنا) ---
     iterations = int(settings.get('lnsUnifiedIterations', 300))
-    destroy_fraction = float(settings.get('lnsUnifiedDestroyFraction', 0.25))
-    initial_temp = 5.0
-    cooling_rate = 0.995
-
-    # --- 2. الحل المبدئي ---
-    current_solution = complete_schedule_with_guards(
+    initial_solution = complete_schedule_with_guards(
         initial_schedule, settings, all_professors, assignments,
         all_levels_list, duty_patterns, date_map, all_subjects, locked_guards=locked_guards
     )
-    best_solution = copy.deepcopy(current_solution)
-    current_cost = calculate_cost(current_solution, settings, all_professors, duty_patterns, date_map)
-    best_cost = current_cost
-    log_q.put(f"... التكلفة الأولية للحل: {format_cost_tuple(best_cost)}")
-    
-    temp = initial_temp
+    initial_cost = calculate_cost(initial_solution, settings, all_professors, duty_patterns, date_map)
+    log_q.put(f"... التكلفة الأولية للحل: {format_cost_tuple(initial_cost)}")
 
-    # --- 3. الحلقة الرئيسية ---
-    for i in range(iterations):
-        if stop_event and stop_event.is_set():
-            log_q.put("... [المرحلة 1] تم الإيقاف بواسطة المستخدم.")
-            break
-        log_q.put(f"PROGRESS:{int(((i+1)/iterations)*100)}")
-        if settings.get('should_stop_event', threading.Event()).is_set(): break
+    repaired_solution = initial_solution
+    repaired_cost = initial_cost
 
-        neighbor_solution = copy.deepcopy(current_solution)
-        was_changed = False # Flag to indicate if repair is needed
-
-        # --- 4. بناء هياكل البيانات المساعدة ---
-        prof_guard_days = defaultdict(set); prof_subject_days = defaultdict(set)
-        prof_stats = {p: {'large': 0, 'other': 0} for p in all_professors}
-        prof_duties = defaultdict(list); prof_assignments = defaultdict(list); prof_large_counts = defaultdict(int)
-        all_exams_flat = [exam for day in neighbor_solution.values() for slot in day.values() for exam in slot]
+    # =================================================================
+    # --- المرحلة 1: استدعاء LNS العادية لجبر النقص ---
+    # =================================================================
+    if initial_cost[0] > 0:
+        log_q.put("--- بدء المرحلة 1: استدعاء LNS العادية لجبر النقص...")
         
-        guards_large_hall = int(settings.get('guardsLargeHall', 4))
-        guards_medium_hall = int(settings.get('guardsMediumHall', 2))
-        guards_small_hall = int(settings.get('guardsSmallHall', 1))
-
-        for exam in all_exams_flat:
-            owner = exam.get('professor', "غير محدد")
-            if owner != "غير محدد": prof_subject_days[owner].add(exam['date'])
-            is_large = any(h['type'] == 'كبيرة' for h in exam.get('halls',[]))
-            large_guards_needed = sum(guards_large_hall for h in exam.get('halls', []) if h.get('type') == 'كبيرة')
-            for idx, guard in enumerate(exam.get('guards', [])):
-                if guard != "**نقص**":
-                    prof_guard_days[guard].add(exam['date'])
-                    prof_duties[guard].append({'exam': exam, 'guard_index': idx})
-                    prof_assignments[guard].append(exam)
-                    if idx < large_guards_needed: prof_stats[guard]['large'] += 1
-                    else: prof_stats[guard]['other'] += 1
-                    if is_large: prof_large_counts[guard] += 1
-
-        # --- 5. تحديد المرحلة واختيار الأداة ---
-        is_currently_valid = (current_cost[0] == 0 and current_cost[1] == 0)
-
-        if not is_currently_valid:
-            # --- المرحلة 1: وضع الإزالة (نفس منطق V12) ---
-            # ... (الكود يبقى كما هو)
-            duties_to_destroy = [d for g, duties in prof_duties.items() for d in duties if (d['exam'].get('uuid'), g) not in locked_guards]
-            if duties_to_destroy:
-                random.shuffle(duties_to_destroy)
-                num_to_destroy = int(len(duties_to_destroy) * destroy_fraction)
-                for duty_info in duties_to_destroy[:num_to_destroy]:
-                    exam_ref = duty_info['exam']
-                    neighbor_solution[exam_ref['date']][exam_ref['time']][
-                        [e['uuid'] for e in neighbor_solution[exam_ref['date']][exam_ref['time']]].index(exam_ref['uuid'])
-                    ]['guards'][duty_info['guard_index']] = "**نقص**"
-                was_changed = True
-        else:
-            # --- المرحلة 2: وضع التحسين (مع إضافة التبديل الذكي) ---
+        # نستدعي الخوارزمية التي تنجح دائماً في الإصلاح
+        repaired_solution_from_lns, _, _, _ = run_large_neighborhood_search(
+            initial_solution, settings, all_professors, duty_patterns, 
+            date_map, log_q, locked_guards, stop_event
+        )
+        
+        # نتحقق من نتيجة الإصلاح
+        if repaired_solution_from_lns:
+            repaired_solution = repaired_solution_from_lns
+        
+        repaired_cost = calculate_cost(repaired_solution, settings, all_professors, duty_patterns, date_map)
+    
+    # --- التحقق من نجاح مرحلة الإصلاح ---
+    if repaired_cost[0] > 0:
+        log_q.put(f"✗ فشلت حتى LNS العادية في جبر النقص. التكلفة النهائية: {format_cost_tuple(repaired_cost)}")
+        best_solution = repaired_solution
+        best_cost = repaired_cost
+    else:
+        log_q.put(f"✓ نجحت LNS العادية في جبر النقص! التكلفة بعد الإصلاح: {format_cost_tuple(repaired_cost)}")
+        
+        # =================================================================
+        # --- المرحلة 2: تشغيل منطق التحسين (V13) على الحل الكامل ---
+        # =================================================================
+        log_q.put("--- بدء المرحلة 2: تحسين الجدول الكامل باستخدام منطق V13...")
+        
+        current_solution = copy.deepcopy(repaired_solution)
+        current_cost = repaired_cost
+        best_solution = copy.deepcopy(current_solution)
+        best_cost = current_cost
+        
+        temp = 5.0
+        cooling_rate = 0.995
+        
+        for i in range(iterations):
+            if stop_event and stop_event.is_set(): break
+            log_q.put(f"PROGRESS:{int(((i+1)/iterations)*100)}")
+            
+            neighbor_solution = copy.deepcopy(current_solution)
+            
+            # (هذا هو منطق التحسين من النسخة V13 الذي تفضله)
+            prof_guard_days = defaultdict(set); prof_subject_days = defaultdict(set)
+            prof_stats = {p: {'large': 0, 'other': 0} for p in all_professors}
+            prof_duties = defaultdict(list); prof_assignments = defaultdict(list); prof_large_counts = defaultdict(int)
+            all_exams_flat = [exam for day in neighbor_solution.values() for slot in day.values() for exam in slot]
+            guards_large_hall = int(settings.get('guardsLargeHall', 4))
+            guards_medium_hall = int(settings.get('guardsMediumHall', 2))
+            guards_small_hall = int(settings.get('guardsSmallHall', 1))
+            
+            for exam in all_exams_flat:
+                owner = exam.get('professor', "غير محدد")
+                if owner != "غير محدد": prof_subject_days[owner].add(exam['date'])
+                is_large = any(h['type'] == 'كبيرة' for h in exam.get('halls',[]))
+                for idx, guard in enumerate(exam.get('guards', [])):
+                    if guard != "**نقص**":
+                        prof_guard_days[guard].add(exam['date'])
+                        prof_duties[guard].append({'exam': exam, 'guard_index': idx})
+                        prof_assignments[guard].append(exam)
+                        if is_large: prof_large_counts[guard] += 1
+            
             tool_choice = random.random()
             if tool_choice < 0.6: # 60% فرصة لمحاولة تحسين الانحراف
-                # ... (أداة التبرع من V12)
-                # ... (الكود يبقى كما هو)
                 custom_patterns = settings.get('customTargetPatterns', [])
                 target_counts = Counter((p['large'], p['other']) for p in custom_patterns for _ in range(p.get('count', 0)))
                 actual_counts = Counter((s['large'], s['other']) for s in prof_stats.values())
@@ -1552,8 +1611,8 @@ def run_unified_lns_optimizer(initial_schedule, settings, all_professors, assign
                             # الآن، تعديل قوائم الحراس لتناسب المتطلبات الجديدة
                             for exam in [exam_A, exam_B]:
                                 needed = (sum(guards_large_hall for h in exam.get('halls',[]) if h['type']=='كبيرة') +
-                                          sum(guards_medium_hall for h in exam.get('halls',[]) if h['type']=='متوسطة') +
-                                          sum(guards_small_hall for h in exam.get('halls',[]) if h['type']=='صغيرة'))
+                                        sum(guards_medium_hall for h in exam.get('halls',[]) if h['type']=='متوسطة') +
+                                        sum(guards_small_hall for h in exam.get('halls',[]) if h['type']=='صغيرة'))
                                 
                                 current_guards = [g for g in exam.get('guards', []) if g != "**نقص**"]
                                 if len(current_guards) > needed:
@@ -1563,111 +1622,92 @@ def run_unified_lns_optimizer(initial_schedule, settings, all_professors, assign
                             
                             was_changed = True # تفعيل الإصلاح الشامل
 
-        # --- 6. الإصلاح (فقط إذا حدث تغيير يتطلب ذلك) ---
-        final_neighbor = neighbor_solution
-        if was_changed:
-            final_neighbor = complete_schedule_with_guards(neighbor_solution, settings, all_professors, assignments, all_levels_list, duty_patterns, date_map, all_subjects, locked_guards=locked_guards)
 
-        # --- 7. التقييم ومنطق القبول (نفس منطق V12) ---
-        new_cost = calculate_cost(final_neighbor, settings, all_professors, duty_patterns, date_map)
-        
-        accepted = False
-        if not is_currently_valid:
-            if new_cost[0] < current_cost[0] or (new_cost[0] == current_cost[0] and new_cost[1] < current_cost[1]):
-                accepted = True
-        else:
-            if new_cost[0] > 0 or new_cost[1] > 0:
-                accepted = False
-            else:
-                cost_diff = sum(w * (n - c) for w, n, c in zip((10, 1), new_cost[2:], current_cost[2:]))
-                if cost_diff < 0 or random.random() < math.exp(-cost_diff / temp if temp > 0 else float('-inf')):
-                    accepted = True
+            final_neighbor = neighbor_solution
+            new_cost = calculate_cost(final_neighbor, settings, all_professors, duty_patterns, date_map)
+            
+            cost_diff = sum(w * (n - c) for w, n, c in zip((10, 1), new_cost[2:], current_cost[2:]))
+            if cost_diff < 0 or random.random() < math.exp(-cost_diff / temp if temp > 0 else float('-inf')):
+                current_solution, current_cost = final_neighbor, new_cost
+                if new_cost < best_cost:
+                    best_solution, best_cost = copy.deepcopy(current_solution), new_cost
+                    log_q.put(f"... [مُحسِّن LNS v16] دورة {i+1}: حل أفضل بتكلفة = {format_cost_tuple(best_cost)}")
 
-        if accepted:
-            current_solution, current_cost = final_neighbor, new_cost
-            if new_cost < best_cost:
-                best_solution, best_cost = copy.deepcopy(current_solution), new_cost
-                log_q.put(f"... [مُحسِّن LNS v13] دورة {i+1}: حل أفضل بتكلفة = {format_cost_tuple(best_cost)}")
-                if best_cost[0] == 0 and best_cost[1] == 0:
-                    log_q.put("... تم الوصول إلى حل صحيح! التركيز الآن على التحسين.")
+            temp = max(0.1, temp * cooling_rate)
 
-        temp = max(0.1, temp * cooling_rate)
-
-    log_q.put(f"✓ انتهى مُحسِّن LNS v13 بأفضل تكلفة: {format_cost_tuple(best_cost)}")
+    log_q.put(f"✓ انتهى مُحسِّن LNS v16 بأفضل تكلفة: {format_cost_tuple(best_cost)}")
     return best_solution, True
 
 # =====================================================================================
-# --- END: UNIFIED LNS ALGORITHM V13 ---
+# --- START: FINAL COMPLETE GENETIC ALGORITHM V3 (Tournament Selection & Cost Tuple) ---
 # =====================================================================================
 
+# --- الخطوة 1: دالة تقييم جديدة تعيد tuple التكلفة مباشرة ---
+def evaluate_chromosome(chromosome, schedule_with_ids, duty_slots, settings, all_professors, date_map):
+    # (هذه الدالة هي نفسها build_schedule_from_chromosome و calculate_fitness مدمجتان)
+    schedule_copy = copy.deepcopy(schedule_with_ids)
+    exam_map = {ex['uuid']: ex for slots in schedule_copy.values() for exams in slots.values() for ex in exams}
+    for ex in exam_map.values():
+        ex['guards'] = []
 
+    for i, guard in enumerate(chromosome):
+        exam_ref_uuid = duty_slots[i]['uuid']
+        exam_in_copy = exam_map.get(exam_ref_uuid)
+        if exam_in_copy:
+            exam_in_copy['guards'].append(guard)
+    
+    return calculate_cost(schedule_copy, settings, all_professors, settings.get('dutyPatterns', {}), date_map)
 
-
-# =====================================================================================
-# --- START: FINAL COMPLETE GENETIC ALGORITHM (WITH ALL CONSTRAINTS) ---
-# =====================================================================================
+# --- الخطوة 2: دالة "الاختيار بالبطولة" الجديدة ---
+def tournament_selection(population_with_costs, k=5):
+    # نختار k متنافسين بشكل عشوائي من السكان
+    tournament_contenders = random.sample(population_with_costs, k)
+    # الفائز هو صاحب أقل تكلفة (الأفضل)
+    winner = min(tournament_contenders, key=lambda item: item[1])
+    return winner[0] # نعيد الكروموسوم الفائز فقط
 
 
 def run_genetic_algorithm(fixed_subject_schedule, settings, all_professors, assignments, all_levels_list, all_halls, exam_schedule_settings, all_subjects, level_hall_assignments, date_map, log_q, locked_guards=set(), stop_event=None):
     """
-    النسخة النهائية والمكتملة من الخوارزمية الجينية مع جميع القيود الصارمة.
+    (النسخة V3) - تستخدم tuple التكلفة والاختيار بالبطولة.
     """
-    log_q.put(">>> [Genetic Alg v3] بدء الخوارزمية الجينية المحدثة...")
-    # --- استخلاص الإعدادات ---
+    log_q.put(">>> [Genetic Alg v3] بدء الخوارزمية الجينية المطورة...")
+    # --- استخلاص الإعدادات (نفس السابق) ---
     pop_size = int(settings.get('geneticPopulation', 100))
     num_generations = int(settings.get('geneticGenerations', 500))
     crossover_rate = 0.8
     mutation_rate = float(settings.get('geneticMutation', 0.15))
     elitism_count = int(settings.get('geneticElitism', 4))
     
-    # --- 1. إعطاء كل امتحان مُعرّف فريد (UUID) وتحضير خانات الحراسة ---
+    # --- التحضيرات (نفس السابق) ---
     schedule_with_ids = copy.deepcopy(fixed_subject_schedule)
     all_exams_flat = [exam for slots in schedule_with_ids.values() for exams in slots.values() for exam in exams]
     for exam in all_exams_flat:
         exam['uuid'] = str(uuid.uuid4())
-
     duty_slots = []
     guards_large_hall = int(settings.get('guardsLargeHall', 4))
     guards_medium_hall = int(settings.get('guardsMediumHall', 2))
     guards_small_hall = int(settings.get('guardsSmallHall', 1))
-
     for exam in all_exams_flat:
         num_guards_needed = (sum(guards_large_hall for h in exam.get('halls', []) if h.get('type') == 'كبيرة') +
                            sum(guards_medium_hall for h in exam.get('halls', []) if h.get('type') == 'متوسطة') +
                            sum(guards_small_hall for h in exam.get('halls', []) if h.get('type') == 'صغيرة'))
         for _ in range(num_guards_needed):
             duty_slots.append(exam)
-
     if not duty_slots:
         return fixed_subject_schedule, True
-
-    # --- 2. تعريف دوال مساعدة ---
-    
-    def build_schedule_from_chromosome(chromosome):
-        schedule_copy = copy.deepcopy(schedule_with_ids)
-        exam_map = {ex['uuid']: ex for slots in schedule_copy.values() for exams in slots.values() for ex in exams}
-        for ex in exam_map.values():
-            ex['guards'] = []
-
-        for i, guard in enumerate(chromosome):
-            exam_ref_uuid = duty_slots[i]['uuid']
-            exam_in_copy = exam_map.get(exam_ref_uuid)
-            if exam_in_copy:
-                exam_in_copy['guards'].append(guard)
-        return schedule_copy
 
     def create_random_chromosome():
         chromosome = [None] * len(duty_slots)
         prof_assignments = {prof: [] for prof in all_professors}
         prof_large_counts = defaultdict(int)
-        
+
         unavailable_days = settings.get('unavailableDays', {})
         duty_patterns = settings.get('dutyPatterns', {})
         max_shifts = int(settings.get('maxShifts', '0')) if settings.get('maxShifts', '0') != '0' else float('inf')
         max_large_hall_shifts = int(settings.get('maxLargeHallShifts', '2')) if settings.get('maxLargeHallShifts', '2') != '0' else float('inf')
         assign_owner_as_guard = settings.get('assignOwnerAsGuard', False)
 
-        # ## <<< بداية: إضافة منطق تعيين أستاذ المادة الإلزامي >>>
         if assign_owner_as_guard:
             subject_owners = { (clean_string_for_matching(s['name']), clean_string_for_matching(s['level'])): clean_string_for_matching(prof) for prof, uids in assignments.items() for uid in uids for s in all_subjects if f"{s['name']} ({s['level']})" == uid }
             prof_last_exam = {}
@@ -1680,42 +1720,37 @@ def run_genetic_algorithm(fixed_subject_schedule, settings, all_professors, assi
 
             for owner, data in prof_last_exam.items():
                 exam_to_assign = data['exam']
-                
-                # إيجاد خانة حراسة فارغة لهذا الامتحان
                 duty_index_to_fill = -1
                 for i, slot_exam in enumerate(duty_slots):
                     if slot_exam['uuid'] == exam_to_assign['uuid'] and chromosome[i] is None:
                         duty_index_to_fill = i
                         break
-                
+
                 if duty_index_to_fill != -1:
-                    # التحقق من صلاحية هذا التعيين الإلزامي
                     is_large = any(h['type'] == 'كبيرة' for h in exam_to_assign.get('halls', []))
                     if exam_to_assign['date'] not in unavailable_days.get(owner, []) and \
-                       len(prof_assignments[owner]) < max_shifts and \
-                       (not is_large or prof_large_counts[owner] < max_large_hall_shifts):
-                        
+                    len(prof_assignments[owner]) < max_shifts and \
+                    (not is_large or prof_large_counts[owner] < max_large_hall_shifts):
+
                         chromosome[duty_index_to_fill] = owner
                         prof_assignments[owner].append(exam_to_assign)
                         if is_large:
                             prof_large_counts[owner] += 1
-        # ## <<< نهاية: منطق التعيين الإلزامي >>>
 
         shuffled_indices = list(range(len(duty_slots)))
         random.shuffle(shuffled_indices)
 
         for i in shuffled_indices:
-            if chromosome[i] is not None: continue # تخطي الخانات التي تم ملؤها
+            if chromosome[i] is not None: continue 
 
             exam = duty_slots[i]
             is_large_exam = any(h['type'] == 'كبيرة' for h in exam.get('halls', []))
-            
+
             shuffled_profs = list(all_professors)
             random.shuffle(shuffled_profs)
 
             assigned_prof = None
             for prof in shuffled_profs:
-                # التحقق من أن الأستاذ غير معين بالفعل في هذه الخانة
                 if any(chromosome[j] == prof for j, slot in enumerate(duty_slots) if slot['uuid'] == exam['uuid']):
                     continue
 
@@ -1728,7 +1763,7 @@ def run_genetic_algorithm(fixed_subject_schedule, settings, all_professors, assi
                 prof_pattern = duty_patterns.get(prof, 'flexible_2_days')
                 current_prof_dates = {e['date'] for e in prof_assignments.get(prof, [])}
                 is_new_day = exam['date'] not in current_prof_dates
-                
+
                 is_pattern_violated = False
                 if is_new_day:
                     num_current_days = len(current_prof_dates)
@@ -1743,10 +1778,10 @@ def run_genetic_algorithm(fixed_subject_schedule, settings, all_professors, assi
                             if existing_day_idx is None or new_day_idx is None or abs(new_day_idx - existing_day_idx) != 1:
                                 is_pattern_violated = True
                 if is_pattern_violated: continue
-                
+
                 assigned_prof = prof
                 break
-            
+
             if assigned_prof:
                 chromosome[i] = assigned_prof
                 prof_assignments[assigned_prof].append(exam)
@@ -1754,136 +1789,230 @@ def run_genetic_algorithm(fixed_subject_schedule, settings, all_professors, assi
                     prof_large_counts[assigned_prof] += 1
             else:
                 chromosome[i] = "**نقص**"
-                
+
         return chromosome
+    
+    def build_schedule_from_chromosome(chromosome, schedule_with_ids, duty_slots):
+        schedule_copy = copy.deepcopy(schedule_with_ids)
+        exam_map = {ex['uuid']: ex for slots in schedule_copy.values() for exams in slots.values() for ex in exams}
+        # هام: مسح الحراس الحاليين قبل ملء الجدول من جديد
+        for ex in exam_map.values():
+            ex['guards'] = []
 
-    def calculate_fitness(chromosome):
-        """
-        (النسخة المحدثة) تحسب درجة اللياقة بناءً على التكلفة المفصلة.
-        """
-        schedule = build_schedule_from_chromosome(chromosome)
-        
-        # استدعاء دالة التكلفة الموحدة
-        cost_tuple = calculate_cost(schedule, settings, all_professors, settings.get('dutyPatterns', {}), date_map)
-        shortage, hard_violations, deviation, soft_violations = cost_tuple
-
-        # تحويل التكلفة إلى درجة لياقة (رقم واحد، كلما كان أعلى كان أفضل)
-        # نبدأ برقم كبير ونخصم منه العقوبات بأوزان مختلفة
-        fitness_score = 1_000_000
-        fitness_score -= shortage * 10000
-        fitness_score -= hard_violations * 5000
-        fitness_score -= deviation * 10
-        fitness_score -= soft_violations * 1
-        
-        # نضمن أن اللياقة لا تقل عن صفر
-        return max(0.0, fitness_score)
-
+        for i, guard in enumerate(chromosome):
+            exam_ref_uuid = duty_slots[i]['uuid']
+            exam_in_copy = exam_map.get(exam_ref_uuid)
+            if exam_in_copy:
+                exam_in_copy['guards'].append(guard)
+        return schedule_copy
+    
+    # --- دوال Crossover و Mutation (تبقى كما هي تماماً) ---
     def crossover(parent1, parent2):
         point = random.randint(1, len(parent1) - 1)
         return parent1[:point] + parent2[point:], parent2[:point] + parent1[point:]
-
+    
     def mutation(chromosome):
-        if len(chromosome) < 2: return chromosome
-        
-        # اختيار خانتين مختلفتين للتبديل
-        idx1, idx2 = random.sample(range(len(chromosome)), 2)
-        
-        # عمل نسخة من الكروموسوم لتجنب التعديل المباشر
+        """
+        عامل طفرة ذكي ومُحسَّن.
+        الاستراتيجية الأولى: إذا كان الكروموسوم غير صالح، فإنه يحاول "إصلاح" الانتهاك.
+        الاستراتيجية الثانية: إذا كان الكروموسوم صالحًا بالفعل، فإنه يقوم بتبديل "آمن" لاستكشاف حلول أخرى.
+        """
         mutated_chromosome = list(chromosome)
-        mutated_chromosome[idx1], mutated_chromosome[idx2] = mutated_chromosome[idx2], mutated_chromosome[idx1]
         
-        # التحقق من صلاحية الطفرة
-        temp_schedule = build_schedule_from_chromosome(mutated_chromosome)
-        if is_schedule_valid(temp_schedule, settings, all_professors, settings.get('dutyPatterns', {}), date_map):
-            return mutated_chromosome # إرجاع الحل الجديد الصالح
-        return chromosome # التراجع عن الطفرة إذا كانت ستنتج حلاً غير صالح
+        # --- التحقق من وجود انتهاكات أولاً ---
+        # بناء جدول مؤقت لتحليله
+        schedule = build_schedule_from_chromosome(mutated_chromosome, schedule_with_ids, duty_slots)
+        
+        # جلب مهام كل أستاذ من الكروموسوم الحالي
+        prof_assigned_slots = defaultdict(list)
+        for i, guard in enumerate(mutated_chromosome):
+            if guard != "**نقص**":
+                exam = duty_slots[i]
+                prof_assigned_slots[guard].append({ 'exam': exam, 'duty_index': i })
 
-    # --- 3. بدء الخوارزمية ---
-    log_queue.put(">>> [Genetic Alg v2] بدء الخوارزمية الجينية المحسنة...")
-    log_queue.put("... بناء المجتمع الأولي على جدول المواد الثابت.")
+        # تحديد الأساتذة الذين ينتهكون قيود نمط الأيام
+        violating_profs = []
+        duty_patterns = settings.get('dutyPatterns', {})
+        for prof, pattern in duty_patterns.items():
+            if not prof_assigned_slots.get(prof): continue
+            
+            duties_dates_indices = sorted(list({date_map.get(d['exam']['date']) for d in prof_assigned_slots.get(prof, []) if date_map.get(d['exam']['date']) is not None}))
+            if not duties_dates_indices: continue
+            
+            num_unique_duty_days = len(duties_dates_indices)
+            is_violated = False
+            # (هذا هو نفس منطق التحقق من صحة القيود الصارمة)
+            if pattern == 'consecutive_strict':
+                if num_unique_duty_days > 0 and (num_unique_duty_days != 2 or (duties_dates_indices[1] - duties_dates_indices[0] != 1)): is_violated = True
+            elif pattern == 'one_day_only':
+                if num_unique_duty_days > 1: is_violated = True
+            elif pattern == 'flexible_2_days':
+                if num_unique_duty_days > 0 and num_unique_duty_days != 2: is_violated = True
+            elif pattern == 'flexible_3_days':
+                if num_unique_duty_days > 0 and (num_unique_duty_days < 2 or num_unique_duty_days > 3): is_violated = True
+            
+            if is_violated:
+                violating_profs.append(prof)
+                
+        # --- الاستراتيجية 1: إصلاح جدول غير صالح ---
+        if violating_profs:
+            prof_to_fix = random.choice(violating_profs)
+            
+            # اختر عشوائياً إحدى مهام هذا الأستاذ لإعادة إسنادها
+            duty_to_reassign_info = random.choice(prof_assigned_slots[prof_to_fix])
+            duty_index = duty_to_reassign_info['duty_index']
+            exam_for_duty = duty_to_reassign_info['exam']
+            
+            # بناء السياق الكامل اللازم للتحقق من صحة التعيين
+            prof_assignments_map = defaultdict(list)
+            prof_large_counts_map = defaultdict(int)
+            all_exams_in_schedule = [exam for day in schedule.values() for slot in day.values() for exam in slot]
+            for exam in all_exams_in_schedule:
+                is_large = any(h['type'] == 'كبيرة' for h in exam.get('halls', []))
+                for guard in exam.get('guards', []):
+                    if guard != "**نقص**":
+                        prof_assignments_map[guard].append(exam)
+                        if is_large: prof_large_counts_map[guard] += 1
+            
+            # ابحث عن أستاذ جديد يمكنه تولي هذه المهمة بشكل صحيح
+            shuffled_profs = list(all_professors); random.shuffle(shuffled_profs)
+            for new_prof in shuffled_profs:
+                if new_prof == prof_to_fix: continue
+                
+                # تحقق مما إذا كان الأستاذ الجديد يستطيع قبول المهمة
+                if is_assignment_valid(new_prof, exam_for_duty, prof_assignments_map, prof_large_counts_map, settings, date_map):
+                    mutated_chromosome[duty_index] = new_prof
+                    return mutated_chromosome # إرجاع الكروموسوم بعد إصلاحه
+
+        # --- الاستراتيجية 2: استكشاف حلول جديدة من جدول صالح ---
+        # إذا لم يكن هناك انتهاكات، قم بإجراء تبديل عشوائي آمن
+        for _ in range(10): 
+            if len(chromosome) < 2: return list(chromosome)
+            idx1, idx2 = random.sample(range(len(chromosome)), 2)
+            if chromosome[idx1] == chromosome[idx2]: continue
+
+            temp_mutated = list(chromosome)
+            temp_mutated[idx1], temp_mutated[idx2] = temp_mutated[idx2], temp_mutated[idx1]
+            
+            # تحقق من أن هذا التبديل الاستكشافي لم يكسر الجدول الصالح
+            temp_schedule = build_schedule_from_chromosome(temp_mutated, schedule_with_ids, duty_slots)
+            if is_schedule_valid(temp_schedule, settings, all_professors, duty_patterns, date_map):
+                return temp_mutated # قبول الحركة الاستكشافية الصالحة
+
+        # إذا فشلت كل من عملية الإصلاح والاستكشاف، أرجع الحل الأصلي
+        return list(chromosome)
+
+    # --- 3. بدء الخوارزمية بالمنطق الجديد ---
+    log_q.put("... بناء المجتمع الأولي...")
+    population = [create_random_chromosome() for _ in range(pop_size)] # create_random_chromosome تبقى كما هي
     
-    try:
-        population = [create_random_chromosome() for _ in range(pop_size)]
-    except Exception as e:
-        import traceback
-        log_queue.put(f"!!! Error during initial population creation: {e}")
-        log_queue.put(traceback.format_exc())
-        return fixed_subject_schedule, False
-    
-    best_chromosome, best_fitness = None, -1.0
+    best_chromosome_so_far = None
+    best_cost_so_far = (float('inf'), float('inf'), float('inf'), float('inf'))
 
     for gen in range(num_generations):
         if stop_event and stop_event.is_set():
             log_q.put("... [Genetic Alg] تم الإيقاف بواسطة المستخدم.")
             break
-        # =================> بداية الإضافة الجديدة <=================
-        # إرسال التقدم بناءً على الجيل الحالي
+            
         percent_complete = int(((gen + 1) / num_generations) * 100)
-        log_queue.put(f"PROGRESS:{percent_complete}")
-        # =================> نهاية الإضافة الجديدة <=================
-        population_with_fitness = [(chrom, calculate_fitness(chrom)) for chrom in population]
+        log_q.put(f"PROGRESS:{percent_complete}")
         
-        valid_population_with_fitness = [item for item in population_with_fitness if item[1] > 0]
-        if not valid_population_with_fitness:
-             log_queue.put(f"... [Generation {gen+1}] Population collapsed. Rebuilding...")
-             population = [create_random_chromosome() for _ in range(pop_size)]
-             continue
+        # --- V3: نقوم بتقييم كل فرد في المجتمع بناءً على tuple التكلفة ---
+        population_with_costs = [(chrom, evaluate_chromosome(chrom, schedule_with_ids, duty_slots, settings, all_professors, date_map)) for chrom in population]
+        
+        # --- V3: الفرز الآن يعتمد على التكلفة (الأقل هو الأفضل) ---
+        # بايثون تقارن الـ tuple عنصرًا بعنصر تلقائيًا، وهذا بالضبط ما نريده
+        population_with_costs.sort(key=lambda item: item[1])
+        
+        current_best_chrom, current_best_cost = population_with_costs[0]
+        
+        if current_best_cost < best_cost_so_far:
+            best_cost_so_far = current_best_cost
+            best_chromosome_so_far = current_best_chrom
+            log_q.put(f"... [Generation {gen+1}/{num_generations}] New best cost: {format_cost_tuple(best_cost_so_far)}")
 
-        current_best_chrom, current_best_fitness = max(valid_population_with_fitness, key=lambda item: item[1])
-        if current_best_fitness > best_fitness:
-            best_fitness, best_chromosome = current_best_fitness, current_best_chrom
-            log_queue.put(f"... [Generation {gen+1}/{num_generations}] New best fitness: {best_fitness:.2f}%")
-
-        if best_fitness >= 99.9:
-            log_queue.put("✓ تم العثور على حل مثالي. إنهاء البحث.")
+        # --- V3: شرط توقف جديد: إذا وجدنا حلاً صالحاً ومثالياً
+        if best_cost_so_far[0] == 0 and best_cost_so_far[1] == 0 and best_cost_so_far[2] == 0 and best_cost_so_far[3] == 0:
+            log_q.put("✓ تم العثور على حل مثالي. إنهاء البحث.")
             break
         
-        valid_population_with_fitness.sort(key=lambda item: item[1], reverse=True)
-        next_generation = [item[0] for item in valid_population_with_fitness[:elitism_count]]
+        # --- V3: النخبة (Elitism) تبقى، نأخذ أفضل الحلول (أقلها تكلفة) ---
+        next_generation = [item[0] for item in population_with_costs[:elitism_count]]
         
         while len(next_generation) < pop_size:
-            parents = random.choices(valid_population_with_fitness, weights=[f for _, f in valid_population_with_fitness], k=2)
-            p1, p2 = parents[0][0], parents[1][0]
+            # اختيار الآباء مع تكاليفهم
+            parent1_item = min(random.sample(population_with_costs, k=5), key=lambda item: item[1])
+            parent2_item = min(random.sample(population_with_costs, k=5), key=lambda item: item[1])
+            p1, p1_cost = parent1_item
+            p2, p2_cost = parent2_item
+
+            c1, c2 = p1, p2  # بشكل افتراضي، الأبناء هم نسخة من الآباء
 
             if random.random() < crossover_rate:
-                c1, c2 = crossover(p1, p2)
-                next_generation.append(mutation(c1) if random.random() < mutation_rate else c1)
-                if len(next_generation) < pop_size:
-                    next_generation.append(mutation(c2) if random.random() < mutation_rate else c2)
+                child1_candidate, child2_candidate = crossover(p1, p2)
+
+                # --- ✅ المنطق الجديد للعبور الحذِر ---
+                # قبول الابن فقط إذا لم يكن أسوأ من الأب من ناحية القيود الصارمة
+                
+                # تقييم الابن المرشح الأول
+                child1_cost = evaluate_chromosome(child1_candidate, schedule_with_ids, duty_slots, settings, all_professors, date_map)
+                # [1] هو مؤشر "القيود الصارمة" في tuple التكلفة
+                if child1_cost[1] <= p1_cost[1]:
+                    c1 = child1_candidate  # تم قبول الابن الأول
+                
+                # تقييم الابن المرشح الثاني
+                child2_cost = evaluate_chromosome(child2_candidate, schedule_with_ids, duty_slots, settings, all_professors, date_map)
+                if child2_cost[1] <= p2_cost[1]:
+                    c2 = child2_candidate  # تم قبول الابن الثاني
+
+            # الآن يتم تطبيق الطفرة الذكية (المُصلِحة) على الأبناء المقبولين
+            if random.random() < mutation_rate:
+                next_generation.append(mutation(c1))
             else:
-                next_generation.append(p1)
-                if len(next_generation) < pop_size:
-                    next_generation.append(p2)
+                next_generation.append(c1)
+
+            if len(next_generation) < pop_size:
+                if random.random() < mutation_rate:
+                    next_generation.append(mutation(c2))
+                else:
+                    next_generation.append(c2)
         population = next_generation
 
-    log_queue.put(f">>> [Genetic Alg v2] Finished. Best fitness score: {best_fitness:.2f}%")
+    log_q.put(f">>> [Genetic Alg v3] Finished. Best cost found: {format_cost_tuple(best_cost_so_far)}")
     
-    if not best_chromosome:
-        log_queue.put("!!! لم تتمكن الخوارزمية الجينية من إيجاد حل صالح.")
-        any_valid = [chrom for chrom, fit in population_with_fitness if fit > 0]
-        if any_valid:
-            best_chromosome = any_valid[0]
-        else:
-            return fixed_subject_schedule, False
+    if not best_chromosome_so_far:
+        log_q.put("!!! لم تتمكن الخوارزمية الجينية من إيجاد حل.")
+        return fixed_subject_schedule, False
 
-    final_schedule = build_schedule_from_chromosome(best_chromosome)
-    return final_schedule, True
+    # --- V3: بناء الجدول النهائي من أفضل كروموسوم تم العثور عليه ---
+    final_schedule = evaluate_chromosome(best_chromosome_so_far, schedule_with_ids, duty_slots, settings, all_professors, date_map)
+    # ملاحظة: دالة التقييم تعيد tuple التكلفة، لكنها تبني الجدول كخطوة وسطية. علينا إعادة بناء الجدول مرة أخيرة
+    final_schedule_built = copy.deepcopy(schedule_with_ids)
+    final_exam_map = {ex['uuid']: ex for slots in final_schedule_built.values() for exams in slots.values() for ex in exams}
+    for ex in final_exam_map.values(): ex['guards'] = []
+    for i, guard in enumerate(best_chromosome_so_far):
+        exam_ref_uuid = duty_slots[i]['uuid']
+        exam_in_copy = final_exam_map.get(exam_ref_uuid)
+        if exam_in_copy: exam_in_copy['guards'].append(guard)
+        
+    return final_schedule_built, True
 
-# --- END: FINAL COMPLETE GENETIC ALGORITHM ---
+# =====================================================================================
+# --- END: GENETIC ALGORITHM V3 ---
 # =====================================================================================
 
 
 # ===================================================================
-# --- START: النسخة المحسنة (مبدأ الأستاذ الأقل حيوية) ---
+# --- START: النسخة النهائية والمحسنة (مبدأ الأستاذ الأكثر تقييدًا) ---
 # ===================================================================
 def complete_schedule_with_guards(subject_schedule, settings, all_professors, assignments, all_levels_list, duty_patterns, date_map, all_subjects, locked_guards=set(), stop_event=None, log_q=None):
     """
-    النسخة المحسّنة: تستخدم "مبدأ الأستاذ الأقل حيوية" لاختيار الحارس
-    الأمثل، مما يقلل بشكل كبير من احتمالية حدوث نقص في الحراسة.
+    النسخة المحسّنة V2: تستخدم "مبدأ الأستاذ الأكثر تقييدًا" (Most Constrained)
+    لتقليل احتمالية حدوث نقص في الحراسة بشكل استباقي.
     """
     schedule = copy.deepcopy(subject_schedule)
     
-    # --- إعدادات وقواميس مساعدة (نفس السابق) ---
+    # --- إعدادات وقواميس مساعدة (لا تغيير هنا) ---
     guards_large_hall = int(settings.get('guardsLargeHall', 4))
     guards_medium_hall = int(settings.get('guardsMediumHall', 2))
     guards_small_hall = int(settings.get('guardsSmallHall', 1))
@@ -1895,7 +2024,7 @@ def complete_schedule_with_guards(subject_schedule, settings, all_professors, as
         'maxLargeHallShifts': settings.get('maxLargeHallShifts', '2')
     }
 
-    # --- 1. تحديد كل الخانات الفارغة وتطبيق المهام المقفلة (نفس السابق) ---
+    # --- 1. تحديد كل الخانات الفارغة وتطبيق المهام المقفلة (لا تغيير هنا) ---
     duties_to_fill = []
     all_scheduled_exams_flat = [exam for day in schedule.values() for slot in day.values() for exam in slot]
     for exam in all_scheduled_exams_flat:
@@ -1915,12 +2044,13 @@ def complete_schedule_with_guards(subject_schedule, settings, all_professors, as
         for _ in range(num_to_add):
             duties_to_fill.append(exam)
     
-    # --- 2. الحلقة الديناميكية: في كل خطوة، جدد التفكير (نفس السابق) ---
+    # --- 2. الحلقة الديناميكية: في كل خطوة، جدد التفكير (لا تغيير هنا) ---
     while duties_to_fill:
         if stop_event and stop_event.is_set():
-            log_q.put("... [توزيع الحراس] تم الإيقاف بواسطة المستخدم.")
+            if log_q: log_q.put("... [توزيع الحراس] تم الإيقاف بواسطة المستخدم.")
             break
-        # --- 2أ. إعادة بناء الحالة الحالية للحراس (نفس السابق) ---
+            
+        # --- 2أ. إعادة بناء الحالة الحالية للحراس (لا تغيير هنا) ---
         prof_assignments = defaultdict(list)
         prof_large_counts = defaultdict(int)
         for exam in all_scheduled_exams_flat:
@@ -1930,10 +2060,8 @@ def complete_schedule_with_guards(subject_schedule, settings, all_professors, as
                     prof_assignments[guard].append(exam)
                     if is_large: prof_large_counts[guard] += 1
         
-        # --- 2ب. إعادة تحليل صعوبة كل المهام المتبقية الآن (نفس السابق) ---
+        # --- 2ب. إعادة تحليل صعوبة كل المهام المتبقية الآن (لا تغيير هنا) ---
         duties_with_candidate_count = []
-        # إنشاء خريطة للمهام المتبقية حسب التوقيت لتسهيل البحث لاحقًا
-        remaining_duties_by_slot = defaultdict(list)
         for duty_exam in duties_to_fill:
             if stop_event and stop_event.is_set(): break
             candidate_count = 0
@@ -1942,65 +2070,65 @@ def complete_schedule_with_guards(subject_schedule, settings, all_professors, as
                 if is_assignment_valid(prof, duty_exam, prof_assignments, prof_large_counts, settings_for_validation, date_map):
                     candidate_count += 1
             duties_with_candidate_count.append({'exam': duty_exam, 'candidates': candidate_count})
-            remaining_duties_by_slot[(duty_exam['date'], duty_exam['time'])].append(duty_exam)
 
         if not duties_with_candidate_count: break
 
-        # --- 2ج. تحديد المهمة الأصعب حاليًا (نفس السابق) ---
+        # --- 2ج. تحديد المهمة الأصعب حاليًا (لا تغيير هنا) ---
         hardest_duty_info = min(duties_with_candidate_count, key=lambda x: x['candidates'])
         hardest_duty_exam = hardest_duty_info['exam']
+        
+        # ###############################################################
+        # ### START: NEW IMPROVED LOGIC FOR GUARD SELECTION           ###
+        # ###############################################################
         
         # --- 2د. إيجاد أفضل حارس للمهمة الأصعب (المنطق الجديد والمحسّن) ---
         valid_candidates_with_scores = []
         
-        # الحصول على قائمة المهام الأخرى المتزامنة مع المهمة الأصعب
-        concurrent_duties = [
-            d for d in remaining_duties_by_slot[(hardest_duty_exam['date'], hardest_duty_exam['time'])]
-            if d is not hardest_duty_exam
-        ]
-        
-        # إيجاد قائمة المرشحين الصالحين للمهمة الصعبة أولاً
+        # أولاً، نجد قائمة المرشحين الصالحين لهذه المهمة الصعبة تحديداً
         valid_candidates_for_hardest = []
         for prof in all_professors:
             if prof in hardest_duty_exam.get('guards', []): continue
             if is_assignment_valid(prof, hardest_duty_exam, prof_assignments, prof_large_counts, settings_for_validation, date_map):
                 valid_candidates_for_hardest.append(prof)
         
-        # حساب درجة الحيوية لكل مرشح صالح
+        # ثانياً، لكل مرشح صالح، نحسب "درجة مرونته" الإجمالية
         for prof in valid_candidates_for_hardest:
             if stop_event and stop_event.is_set(): break
-            criticality_score = 0
-            # احسب كم مرة هذا الأستاذ هو مرشح "حيوي" للمهام المتزامنة الأخرى
-            for other_duty in concurrent_duties:
-                # احسب عدد المرشحين الكلي للمهمة الأخرى
-                other_duty_candidates = 0
-                for other_prof in all_professors:
-                    if other_prof in other_duty.get('guards',[]): continue
-                    if is_assignment_valid(other_prof, other_duty, prof_assignments, prof_large_counts, settings_for_validation, date_map):
-                        other_duty_candidates += 1
+            
+            # درجة المرونة = عدد الخانات الفارغة الأخرى التي لا يزال هذا الأستاذ صالحاً لها
+            flexibility_score = 0
+            for other_duty in duties_to_fill:
+                # لا نحسب المهمة الحالية ضمن درجة المرونة
+                if other_duty is hardest_duty_exam: continue
                 
-                # إذا كان أستاذنا الحالي مرشحاً لهذه المهمة الصعبة، زد درجة حيويته
-                if other_duty_candidates <= 2 and is_assignment_valid(prof, other_duty, prof_assignments, prof_large_counts, settings_for_validation, date_map):
-                    criticality_score += 1
+                # هل يمكن لهذا الأستاذ أن يأخذ هذه المهمة الأخرى؟
+                if prof not in other_duty.get('guards', []) and is_assignment_valid(prof, other_duty, prof_assignments, prof_large_counts, settings_for_validation, date_map):
+                    flexibility_score += 1
             
             workload = len(prof_assignments.get(prof, []))
-            # نخزن (درجة الحيوية، عبء العمل، اسم الأستاذ)
-            valid_candidates_with_scores.append((criticality_score, workload, prof))
+            # نخزن (درجة المرونة، عبء العمل الحالي، اسم الأستاذ)
+            valid_candidates_with_scores.append((flexibility_score, workload, prof))
         
         
         best_prof_found = None
         if valid_candidates_with_scores:
-            # فرز المرشحين: أولاً حسب أقل درجة حيوية، ثم حسب أقل عبء عمل
+            # الفرز: أولاً حسب أقل درجة مرونة (الأكثر تقييدًا)، ثم حسب أقل عبء عمل كعامل ثانوي
             valid_candidates_with_scores.sort(key=lambda x: (x[0], x[1]))
-            best_prof_found = valid_candidates_with_scores[0][2]
+            best_prof_found = valid_candidates_with_scores[0][2] # [0] هو الأفضل، [2] هو اسم الأستاذ
             hardest_duty_exam['guards'].append(best_prof_found)
         else:
+            # إذا لم يتم العثور على أي مرشح صالح، نسجل حالة نقص
             hardest_duty_exam['guards'].append("**نقص**")
         
-        # --- 2هـ. إزالة المهمة التي تم حلها من القائمة (نفس السابق) ---
+        # ###############################################################
+        # ### END: NEW IMPROVED LOGIC                                 ###
+        # ###############################################################
+        
+        # --- 2هـ. إزالة المهمة التي تم حلها من القائمة (لا تغيير هنا) ---
         try:
             duties_to_fill.remove(hardest_duty_exam)
         except ValueError:
+             # حل بديل آمن في حال كان العنصر غير موجود لسبب ما
              for i, item in enumerate(duties_to_fill):
                  if item is hardest_duty_exam:
                      del duties_to_fill[i]
@@ -2008,18 +2136,30 @@ def complete_schedule_with_guards(subject_schedule, settings, all_professors, as
 
     return schedule
 # ===================================================================
-# --- END: النسخة المحسنة ---
+# --- END: النسخة النهائية والمحسنة ---
 # ===================================================================
 
-# في ملف app.py، استبدل الدالة بالكامل بهذه النسخة النهائية (الإصدار التاسع - المستقر)
 def run_constraint_solver(original_schedule, settings, all_professors, assignments, all_levels_list, subject_owners, last_day_restriction, sorted_dates, duty_patterns, date_map, log_q, stop_event=None):
     """
-    النسخة المحدثة: مع إضافة قيد "أزواج الأساتذة" الرياضي.
+    النسخة النهائية والمصححة (V10):
+    - تستخدم UUID لضمان بناء الجدول بشكل صحيح حتى مع وجود امتحانات متشابهة.
+    - تعيد None عند الفشل لتجنب معالجة النتائج الخاطئة.
+    - تضيف معرفات UUID إذا كانت غير موجودة.
     """
     model = cp_model.CpModel()
-    all_scheduled_exams = [exam for date_exams in original_schedule.values() for time_exams in date_exams.values() for exam in time_exams]
+    
+    # --- ✅  بداية التصحيح: ضمان وجود UUID لكل امتحان ---
+    schedule_with_ids = copy.deepcopy(original_schedule)
+    all_scheduled_exams = []
+    for date, time_slots in schedule_with_ids.items():
+        for time, exams in time_slots.items():
+            for exam in exams:
+                if 'uuid' not in exam:
+                    exam['uuid'] = str(uuid.uuid4())
+                all_scheduled_exams.append(exam)
+    # --- نهاية التصحيح ---
 
-    # --- استخلاص الإعدادات ---
+    # --- استخلاص الإعدادات (تبقى كما هي) ---
     large_hall_weight = int(settings.get('largeHallWeight', 3))
     other_hall_weight = int(settings.get('otherHallWeight', 1))
     max_shifts = int(settings.get('maxShifts', '0')) if settings.get('maxShifts', '0') != '0' else float('inf')
@@ -2034,20 +2174,23 @@ def run_constraint_solver(original_schedule, settings, all_professors, assignmen
     guards_small_hall = int(settings.get('guardsSmallHall', 1))
     unavailable_days = settings.get('unavailableDays', {})
     
-    # --- بناء كل المتغيرات والقيود الصارمة (بما في ذلك قيد الأزواج) ---
+    # بناء كل المتغيرات والقيود الصارمة (بما في ذلك قيد الأزواج)
     duties = []
     for exam in all_scheduled_exams:
         num_guards_needed = sum(guards_large_hall for h in exam.get('halls', []) if h.get('type') == 'كبيرة') + sum(guards_medium_hall for h in exam.get('halls', []) if h.get('type') == 'متوسطة') + sum(guards_small_hall for h in exam.get('halls', []) if h.get('type') == 'صغيرة')
-        for _ in range(num_guards_needed): duties.append({'exam': exam, 'is_large': any(h['type'] == 'كبيرة' for h in exam['halls'])})
+        for _ in range(num_guards_needed):
+            # ✅  تصحيح: قم بتضمين الـ UUID في كل مهمة
+            duties.append({'exam_uuid': exam['uuid'], 'exam_date': exam['date'], 'exam_time': exam['time'], 'is_large': any(h['type'] == 'كبيرة' for h in exam['halls'])})
 
     x = {(p_idx, d_idx): model.NewBoolVar(f'x_{p_idx}_{d_idx}') for p_idx in range(num_professors) for d_idx in range(len(duties))}
     for d_idx in range(len(duties)): model.AddExactlyOne(x[p_idx, d_idx] for p_idx in range(num_professors))
     
     slots = defaultdict(list)
-    for d_idx, duty in enumerate(duties): slots[(duty['exam']['date'], duty['exam']['time'])].append(d_idx)
+    for d_idx, duty in enumerate(duties): slots[(duty['exam_date'], duty['exam_time'])].append(d_idx)
     for p_idx in range(num_professors):
         for slot_duties in slots.values(): model.Add(sum(x[p_idx, d] for d in slot_duties) <= 1)
     
+    # (بقية قيود النموذج تبقى كما هي تماماً)
     if max_shifts != float('inf'):
         for p_idx in range(num_professors): model.Add(sum(x[p_idx, d_idx] for d_idx in range(len(duties))) <= max_shifts)
     if max_large_hall_shifts != float('inf'):
@@ -2057,7 +2200,7 @@ def run_constraint_solver(original_schedule, settings, all_professors, assignmen
         if prof in prof_map:
             p_idx = prof_map[prof]
             for d_idx, duty in enumerate(duties):
-                if duty['exam']['date'] in dates: model.Add(x[p_idx, d_idx] == 0)
+                if duty['exam_date'] in dates: model.Add(x[p_idx, d_idx] == 0)
 
     is_duty_day, prof_has_any_duty = {}, {}
     for p_idx in range(num_professors):
@@ -2066,7 +2209,7 @@ def run_constraint_solver(original_schedule, settings, all_professors, assignmen
         model.Add(sum(duties_for_prof) > 0).OnlyEnforceIf(prof_has_any_duty[p_idx]); model.Add(sum(duties_for_prof) == 0).OnlyEnforceIf(prof_has_any_duty[p_idx].Not())
         for day_idx in range(len(sorted_dates)):
             is_duty_day[p_idx, day_idx] = model.NewBoolVar(f'is_duty_day_{p_idx}_{day_idx}')
-            duties_in_this_day = [x[p_idx, d_idx] for d_idx, duty in enumerate(duties) if date_map.get(duty['exam']['date']) == day_idx]
+            duties_in_this_day = [x[p_idx, d_idx] for d_idx, duty in enumerate(duties) if date_map.get(duty['exam_date']) == day_idx]
             if duties_in_this_day:
                 model.AddBoolOr(duties_in_this_day).OnlyEnforceIf(is_duty_day[p_idx, day_idx]); model.Add(sum(duties_in_this_day) == 0).OnlyEnforceIf(is_duty_day[p_idx, day_idx].Not())
             else: model.Add(is_duty_day[p_idx, day_idx] == False)
@@ -2082,34 +2225,25 @@ def run_constraint_solver(original_schedule, settings, all_professors, assignmen
                     model.AddBoolAnd([is_duty_day[p_idx, day_idx], is_duty_day[p_idx, day_idx+1]]).OnlyEnforceIf(is_start_of_consecutive_pair[day_idx])
                     model.AddBoolOr([is_duty_day[p_idx, day_idx].Not(), is_duty_day[p_idx, day_idx+1].Not()]).OnlyEnforceIf(is_start_of_consecutive_pair[day_idx].Not())
                 model.Add(sum(is_start_of_consecutive_pair) == 1).OnlyEnforceIf(prof_has_any_duty[p_idx])
-            elif pattern == 'one_day_only':
-                model.Add(num_unique_duty_days <= 1).OnlyEnforceIf(prof_has_any_duty[p_idx])
+            elif pattern == 'one_day_only': model.Add(num_unique_duty_days <= 1).OnlyEnforceIf(prof_has_any_duty[p_idx])
             elif pattern == 'flexible_2_days': model.Add(num_unique_duty_days == 2).OnlyEnforceIf(prof_has_any_duty[p_idx])
             elif pattern == 'flexible_3_days':
                 model.Add(num_unique_duty_days >= 2).OnlyEnforceIf(prof_has_any_duty[p_idx]); model.Add(num_unique_duty_days <= 3).OnlyEnforceIf(prof_has_any_duty[p_idx])
     
-    # --- بداية: إضافة قيد أزواج الأساتذة ---
-    professor_pairs = settings.get('professorPartnerships', []) # تم تغيير اسم المفتاح
+    professor_pairs = settings.get('professorPartnerships', [])
     if professor_pairs:
         for pair in professor_pairs:
             if len(pair) == 2 and pair[0] in prof_map and pair[1] in prof_map:
-                prof1_idx = prof_map[pair[0]]
-                prof2_idx = prof_map[pair[1]]
-                # لكل يوم في الجدول، يجب أن يكونا إما كلاهما يعمل أو كلاهما لا يعمل
+                prof1_idx, prof2_idx = prof_map[pair[0]], prof_map[pair[1]]
                 for day_idx in range(len(sorted_dates)):
                     model.Add(is_duty_day[prof1_idx, day_idx] == is_duty_day[prof2_idx, day_idx])
-    # --- نهاية: إضافة قيد أزواج الأساتذة ---
 
-    # --- الهدف (Objective) ---
+    # الهدف (Objective) - يبقى كما هو
     prof_large_duties = [model.NewIntVar(0, 100, f'large_{p}') for p in range(num_professors)]
     prof_other_duties = [model.NewIntVar(0, 100, f'other_{p}') for p in range(num_professors)]
-    # ... (بقية الدالة تبقى كما هي دون تغيير) ...
-    # ...
-    #
     for p_idx in range(num_professors):
         model.Add(prof_large_duties[p_idx] == sum(x[p_idx, d_idx] for d_idx, duty in enumerate(duties) if duty['is_large']))
         model.Add(prof_other_duties[p_idx] == sum(x[p_idx, d_idx] for d_idx, duty in enumerate(duties) if not duty['is_large']))
-
     if enable_custom_targets and custom_target_patterns:
         log_q.put("... استخدام نموذج تقليل الانحراف مع معاقبة الأنماط غير المستهدفة")
         target_counts = Counter((p['large'], p['other']) for p in custom_target_patterns for _ in range(p.get('count', 0)))
@@ -2123,11 +2257,11 @@ def run_constraint_solver(original_schedule, settings, all_professors, assignmen
         deviation_terms = []
         for pattern, target_count in target_counts.items():
             deviation = model.NewIntVar(0, num_professors, f'dev_{pattern}')
-            model.AddAbsEquality(deviation, actual_counts[pattern] - target_count)
+            model.AddAbsEquality(deviation, actual_counts.get(pattern, 0) - target_count)
             deviation_terms.append(deviation)
         total_deviation = sum(deviation_terms)
         num_untracked = model.NewIntVar(0, num_professors, 'num_untracked')
-        total_tracked_profs = sum(actual_counts.values())
+        total_tracked_profs = sum(actual_counts.values()) if actual_counts else 0
         model.Add(num_untracked == num_professors - total_tracked_profs)
         model.Minimize(total_deviation + 10 * num_untracked)
     else:
@@ -2140,7 +2274,7 @@ def run_constraint_solver(original_schedule, settings, all_professors, assignmen
             model.AddMinEquality(min_w, prof_workload); model.AddMaxEquality(max_w, prof_workload)
         model.Minimize(max_w - min_w)
 
-    # --- حل النموذج ---
+    # --- حل النموذج (يبقى كما هو) ---
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(solver_timelimit)
     if stop_event:
@@ -2149,31 +2283,41 @@ def run_constraint_solver(original_schedule, settings, all_professors, assignmen
                 cp_model.CpSolverSolutionCallback.__init__(self)
                 self._event = event
             def on_solution_callback(self):
-                if self._event.is_set():
-                    self.StopSearch()
-        
+                if self._event.is_set(): self.StopSearch()
         status = solver.Solve(model, StopSearchCallback(stop_event))
     else:
         status = solver.Solve(model)
-    
 
+    # --- ✅  بداية التصحيح: منطق جديد بالكامل لبناء النتائج ---
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         log_q.put("✓ تم العثور على حل باستخدام البرمجة بالقيود.")
-        new_schedule_list = copy.deepcopy(all_scheduled_exams)
-        for exam in new_schedule_list: exam['guards'] = []
-        exam_map_by_props = {(e['subject'], e['level'], e['date'], e['time']): e for e in new_schedule_list}
+        
+        # 1. إنشاء خريطة بحث سريعة باستخدام الـ UUID
+        exam_map_by_uuid = {e['uuid']: e for e in all_scheduled_exams}
+        
+        # 2. مسح الحراس القدامى من كل الامتحانات في الخريطة
+        for exam in exam_map_by_uuid.values():
+            exam['guards'] = []
+
+        # 3. ملء قوائم الحراس بناءً على حل النموذج
         for p_idx in range(num_professors):
             for d_idx, duty in enumerate(duties):
                 if solver.Value(x[p_idx, d_idx]):
-                    exam_props = duty['exam']
-                    exam_key = (exam_props['subject'], exam_props['level'], exam_props['date'], exam_props['time'])
-                    if exam_key in exam_map_by_props: exam_map_by_props[exam_key]['guards'].append(all_professors[p_idx])
+                    exam_uuid = duty['exam_uuid']
+                    # الإضافة الآمنة للحارس باستخدام الـ UUID
+                    if exam_uuid in exam_map_by_uuid:
+                        exam_map_by_uuid[exam_uuid]['guards'].append(all_professors[p_idx])
+
+        # 4. إعادة بناء هيكل الجدول النهائي من القائمة المسطحة
         final_schedule = defaultdict(lambda: defaultdict(list))
-        for exam in new_schedule_list: final_schedule[exam['date']][exam['time']].append(exam)
+        for exam in all_scheduled_exams:
+            final_schedule[exam['date']][exam['time']].append(exam)
+            
         return final_schedule, True
     else:
         log_q.put("✗ فشل! لم يتم العثور على أي حل صالح. هذا يؤكد وجود تضارب في القيود نفسها.")
-        return original_schedule, False
+        # إرجاع None للإشارة بوضوح إلى الفشل
+        return None, False
 
 # =====================================================================
 # START: HYPER-HEURISTIC FRAMEWORK (CORRECTED & ENHANCED FOR PROJECT 2)
@@ -2429,10 +2573,6 @@ def _run_schedule_logic_in_background(settings, log_q, stop_event):
         
         balancing_strategy = settings.get('balancingStrategy', 'advanced')
         swap_attempts = int(settings.get('swapAttempts', 50))
-        polishing_swaps = int(settings.get('polishingSwaps', 15))
-        annealing_temp = float(settings.get('annealingTemp', 1000.0))
-        annealing_cooling = float(settings.get('annealingCooling', 0.995))
-        annealing_iterations = int(settings.get('annealingIterations', 1000))
         solver_timelimit = int(settings.get('solverTimelimit', 30))
         
         level_hall_assignments = settings.get('levelHallAssignments', {})
@@ -2481,6 +2621,7 @@ def _run_schedule_logic_in_background(settings, log_q, stop_event):
             if stop_event.is_set():
                 log_q.put(f"... [محاولة {i+1}] تم اكتشاف إشارة توقف. إنهاء البحث المكثف.")
                 break
+            
             log_q.put(f">>> [Iteration {i+1}/{num_iterations}] بدء محاولة جديدة...")
 
             best_schedule_from_refinement = None
@@ -2606,20 +2747,29 @@ def _run_schedule_logic_in_background(settings, log_q, stop_event):
                         all_levels_list, duty_patterns, date_map, all_subjects, locked_guards=locked_guards, stop_event=stop_event
                     )
                     
-                    if balancing_strategy in ['advanced', 'phased_polished']:
-                        log_q.put("... تطبيق مرحلة الصقل والتحسين...")
-                        swap_count = swap_attempts if balancing_strategy == 'advanced' else polishing_swaps
-                        temp_schedule, _, _, _ = run_post_processing_swaps(
-                            temp_schedule, defaultdict(list), defaultdict(float), defaultdict(int), 
-                            settings, all_professors, date_map, swap_count, locked_guards=locked_guards, stop_event=stop_event
-                        )
+                    if balancing_strategy == 'advanced':
+                        log_q.put("... تطبيق مرحلة الصقل والتحسين (استراتيجية متقدمة)...")
+                        
+                        # --- بداية التعديل V4: استراتيجية المرحلتين (انحراف ثم قيود مرنة) ---
+                        if settings.get('enableCustomTargets', False) and settings.get('customTargetPatterns', []):
+                            # المرحلة 1: موازنة الانحراف
+                            balanced_schedule = run_simulated_annealing_balancer(
+                                temp_schedule, settings, all_professors, duty_patterns, date_map,
+                                locked_guards=locked_guards, stop_event=stop_event, log_q=log_q
+                            )
+                            # المرحلة 2: صقل القيود المرنة
+                            temp_schedule = run_advanced_polisher(
+                                balanced_schedule, settings, all_professors, duty_patterns, date_map,
+                                locked_guards=locked_guards, stop_event=stop_event, log_q=log_q
+                            )
+                        else:
+                            # إذا لم تكن مفعلة، استخدم الخوارزمية القديمة التي توازن العبء العام
+                            log_q.put("... (أهداف مخصصة غير مفعلة، سيتم استخدام موازنة العبء العام)...")
+                            temp_schedule, _, _, _ = run_post_processing_swaps(
+                                temp_schedule, defaultdict(list), defaultdict(float), defaultdict(int), 
+                                settings, all_professors, date_map, swap_attempts, locked_guards=locked_guards, stop_event=stop_event, log_q=log_q
+                            )
 
-                    elif balancing_strategy == 'annealing':
-                        temp_schedule, _, _, _ = run_simulated_annealing(
-                            temp_schedule, defaultdict(list), defaultdict(float), defaultdict(int),
-                            settings, all_professors, date_map, duty_patterns, 
-                            annealing_iterations, annealing_temp, annealing_cooling
-                        )
 
                     strategy_success = True
                 # =========================================================
